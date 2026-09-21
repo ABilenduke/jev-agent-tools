@@ -1,0 +1,75 @@
+# Decisions
+
+Dated, in the order they were made. Each records what was chosen, what was rejected and why. All on 2026-09-20 unless noted.
+
+## 1. Shape: a command and a hook, not an agent or a gateway
+
+**Chosen.** Expose Jev as something the agent runs (originally MCP tools, see decision 2) plus a hook the harness runs on every prompt.
+
+**Rejected.** A subagent wrapping Jev: a reasoning model in front of a 100 ms judgment API removes the speed and cost advantage, and Jev does not converse. A gateway or proxy: one endpoint, one bearer key, retries in the SDK; nothing to route. Documentation only: the pre-existing `typesafe` skill already covered writing product code against Jev, but gave the agent no way to use Jev in its own work.
+
+**Why a hook first.** TypeSafe's skill-suggestion cookbook targets the harness problem directly, with measured results, and the roster on this machine is large. It also demonstrates the second kind of use: Jev deciding with no model in the loop.
+
+## 2. Command-line interface as primary; MCP server opt-in
+
+**Chosen.** `jev rank` and `jev ask` on PATH. `dist/mcp.js` kept in the repo, not registered.
+
+**Rejected.** MCP tools as the primary interface, which is what was built first.
+
+**Why.** Andrew asked why an MCP server rather than a CLI, and the comparison did not favour MCP for this tool. With an MCP tool the model must emit every candidate's text as tool-call arguments, so bulk data flows through its context and output tokens; the command reads files and grep output itself. A command runs in any agent with a shell, composes with pipes and `jq`, and costs no context until used. MCP keeps a small edge for shell-less agents and for typed input without shell quoting, which the command matches by taking JSON on stdin. Noted as a standing preference: default to a CLI plus a skill; propose MCP only when there is no shell. The token arithmetic is worked through in `docs/why-a-cli.md`.
+
+## 3. Personal tooling, not a product dependency
+
+**Chosen.** The plugin lives outside every Cylinder Software repository and no company code depends on it. Product code that needs a judgment service continues to take a judgment function as an argument, as the design-system authoring layer does, so the provider remains an open product choice.
+
+**Why.** The company's AGENTS.md forbids child repositories depending on personal plugins, and TypeSafe has not been selected for any product. Documentation of this plugin belongs in this repo, not in the company knowledge vault.
+
+## 4. Key resolution: environment, then a key file; never write one
+
+**Chosen.** `TYPESAFE_API_KEY`, else `~/.config/typesafe/api_key`. The plugin never creates or copies a key.
+
+**Why.** Hooks run under `sh -c` without the interactive profile, and MCP clients strip the environment; both were observed during development. A file with mode 600 is reachable by every launch path. Copying a secret is the user's action, not the tool's.
+
+## 5. The Judge port and offline tests
+
+**Chosen.** Every module that asks Jev takes a `Judge` function. Tests pass a fake; production passes the SDK-backed judge from `client.ts`. The suite runs with no network.
+
+**Why.** Mirrors the port the design-system package already uses for the same reason, and made test-first development possible for ranking, suggestion and the command without spending tokens or depending on model behaviour.
+
+## 6. Window mode falls back to rerank above 255 candidates
+
+**Chosen.** No two-pass window selection.
+
+**Rejected.** The cookbook's two-pass approach (a Choice picks a window of lines, a second Choice ranks within it).
+
+**Why.** Simpler, and rerank is already the more isolated mode. Window selection can be added if a real workload with thousands of candidates shows rerank too slow or costly.
+
+## 7. All questions and thresholds in one file
+
+**Chosen.** `src/questions.ts` holds every question text and constant. No configuration file, no environment overrides.
+
+**Why.** TypeSafe's guidance is that these are what a human should review. A constant in a reviewed diff is easier to reason about than a value that might come from three places.
+
+## 8. Roster naming follows the Claude Code catalog
+
+**Chosen.** Plugin skills are `<plugin>:<skill>`, synced user skills are `anthropic-skills:<name>`, project commands are bare names.
+
+**Why.** A suggestion is only useful if the agent can invoke it verbatim. The names were checked against the session catalog and the first live runs.
+
+## 9. Trust `CLAUDE_PLUGIN_DATA` only when it names this plugin
+
+**Chosen.** The data directory is `CLAUDE_PLUGIN_DATA` only if its basename starts with `jev`; otherwise `~/.local/state/jev-agent-tools`.
+
+**Why.** During development the shell carried another plugin's `CLAUDE_PLUGIN_DATA`, and the first log line landed in that plugin's directory. The harness sets the variable correctly for real hook runs; the guard protects against inherited values.
+
+## 10. Repository renamed from `jev-claude-plugin` to `jev-agent-tools`
+
+**Chosen.** The rename, with the plugin id `jev`, the MCP server name `jev` and the skill `jev-tools` unchanged.
+
+**Why.** Andrew asked whether it would work with Codex and other agents. The command and skill do; the name should not claim otherwise.
+
+## 11. No cache for the roster or for answers
+
+**Chosen.** Re-read roster files on every hook run; never cache Jev answers.
+
+**Why.** About 90 small files read in milliseconds; a cache is one more thing to invalidate. Answers are cheap and state changes between calls.

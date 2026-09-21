@@ -1,0 +1,30 @@
+{
+  "name": "jev-agent-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jev (TypeSafe System One) judgment tools and hooks for Claude Code",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
+    "check": "npm run typecheck && npm test && npm run build",
+    "link": "chmod +x dist/cli.js && mkdir -p ~/.local/bin && ln -sfn \"$PWD/dist/cli.js\" ~/.local/bin/jev && echo linked ~/.local/bin/jev"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  },
+  "bin": {
+    "jev": "dist/cli.js"
+  }
+}
