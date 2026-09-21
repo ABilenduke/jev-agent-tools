@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Questions, SystemOneResult } from '@typesafe-ai/sdk';
-import { suggest, shouldSkip, hookOutput } from '../src/hooks/skill-suggest.js';
+import { suggest, shouldSkip, hookOutput, detectAgent } from '../src/hooks/skill-suggest.js';
 import { SUGGEST_GATE, SUGGEST_FIT, SUGGEST_SHORTLIST } from '../src/questions.js';
 import type { Judge, JudgeRequest } from '../src/judge.js';
 import type { RosterEntry } from '../src/roster.js';
@@ -98,4 +98,11 @@ test('dataDir trusts CLAUDE_PLUGIN_DATA only when it belongs to this plugin', ()
   assert.equal(dataDir({ CLAUDE_PLUGIN_DATA: '/x/plugins/data/jev-skills-dir' }, home), '/x/plugins/data/jev-skills-dir');
   assert.equal(dataDir({ CLAUDE_PLUGIN_DATA: '/x/plugins/data/codex-openai-codex' }, home), '/home/u/.local/state/jev-agent-tools');
   assert.equal(dataDir({}, home), '/home/u/.local/state/jev-agent-tools');
+});
+
+test('detectAgent reads the harness from hook stdin fields', () => {
+  assert.equal(detectAgent({ transcript_path: '/h/.claude/projects/x/y.jsonl' }), 'claude');
+  assert.equal(detectAgent({ turn_id: '0199-abc' }), 'codex');
+  assert.equal(detectAgent({ transcript_path: '/t', turn_id: 'x' }), 'claude');
+  assert.equal(detectAgent({}), 'unknown');
 });

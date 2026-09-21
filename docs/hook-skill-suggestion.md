@@ -28,11 +28,11 @@ It is a hint, not an instruction. The agent's own skill rules still decide.
 { "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/hooks/skill-suggest.js", "timeout": 10 } ] } ] } }
 ```
 
-Claude Code loads it with the plugin. Codex reads the same file format and sets `CLAUDE_PLUGIN_ROOT` for compatibility, but see the roster caveat below.
+Claude Code loads it with the plugin. Codex reads the same file format from `~/.codex/hooks.json`; the entry there names the built file by absolute path because nothing sets `CLAUDE_PLUGIN_ROOT` outside a plugin (`docs/install.md`).
 
 ## Input
 
-Hook stdin JSON. Fields used: `prompt` and `cwd`. The hook skips silently when the trimmed prompt is under 12 characters or starts with `/` (a slash command already names its skill).
+Hook stdin JSON. Fields used: `prompt`, `cwd`, and two that identify the harness: Claude Code sends `transcript_path`, Codex sends `turn_id` and no transcript. `transcript_path` wins, then `turn_id`, else the agent is `unknown` and both rosters are ranked as one. The hook skips silently when the trimmed prompt is under 12 characters or starts with `/` (a slash command already names its skill).
 
 ## The two requests
 
@@ -56,7 +56,9 @@ If the best `fits` probability is below `SUGGEST_FIT` (0.30) nothing is suggeste
 
 ## Roster sources
 
-`src/roster.ts` enumerates, in this order, and names entries the way the Claude Code session catalog shows them so a suggestion can be invoked verbatim:
+`src/roster.ts` enumerates the locations of whichever agent sent the prompt, and names entries the way that agent's session catalog shows them so a suggestion can be invoked verbatim.
+
+**Claude Code**, in the order the session catalog surfaces them:
 
 | Location | Named as |
 |---|---|
@@ -71,7 +73,21 @@ If the best `fits` probability is below `SUGGEST_FIT` (0.30) nothing is suggeste
 
 Entries without a `description` in frontmatter are dropped: the model cannot judge what is not described. Duplicate names keep the first occurrence. Frontmatter parsing is minimal and folds indented continuation lines into the value, which is how the scaffolded descriptions are written.
 
-**Codex caveat.** These are Claude Code locations. Under Codex the hook would run but rank Claude's roster and miss `~/.codex/skills`, `~/.agents/skills` at user level and the Codex plugin cache. Adding those sources is on the roadmap.
+**Codex** (codex-cli 0.154), taken from the `<skills_instructions>` catalog Codex writes into every session rollout rather than from its documentation:
+
+| Location | Named as |
+|---|---|
+| `~/.agents/skills/<name>/SKILL.md` | `<name>` |
+| `~/.codex/skills/.system/<name>/SKILL.md` | `<name>` |
+| `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/skills/<skill>/SKILL.md` | `<plugin>:<skill>` |
+| `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/.codex-plugin/migrated-command-skills/<dir>/SKILL.md` | `<plugin>:<dir>` |
+| `<cwd>/.agents/skills/<name>/SKILL.md` | `<name>` |
+
+A cached plugin counts when `~/.codex/config.toml` does not set `enabled = false` for `<plugin>@<marketplace>` and either declares `[marketplaces.<marketplace>]` or the marketplace is the account-managed `openai-curated-remote`, whose plugins have no config entry. The file is scanned line by line for those two things only. When several versions are cached the newest wins the name. Legacy `~/.codex/skills/<name>` and plugin `commands/` directories are not in the Codex catalog and are skipped.
+
+Compared with the catalog of a real session on this machine (111 entries), the loader produces the same 111 plus 21 it cannot tell apart: the 20 `openai-templates:*` skills of a remote plugin that is installed and enabled but not surfaced, and the system skill `review-agent`. Both have ordinary frontmatter; whatever hides them is not on disk. Decision 12.
+
+`agent: 'unknown'` returns the union of both lists, Claude Code entries first.
 
 ## Logging
 
@@ -82,6 +98,7 @@ Each run that reaches the judge appends one JSON line to `suggestions.jsonl` in 
 | `at` | ISO timestamp |
 | `prompt_sha256` | first 16 hex characters of the prompt's SHA-256; the prompt itself is not stored |
 | `prompt_chars` | prompt length |
+| `agent` | `claude`, `codex` or `unknown`, from the stdin fields above |
 | `roster_size` | entries considered |
 | `skill` | the suggestion, or `null` |
 | `gate` | the gate mean |

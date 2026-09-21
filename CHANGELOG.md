@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 — 2026-09-20
+
+- The hook recognises which agent sent the prompt (`transcript_path` for Claude Code, `turn_id` for Codex) and ranks that agent's roster; unknown harnesses get the union. Logged as `agent`.
+- Codex roster sources: `~/.agents/skills`, `~/.codex/skills/.system`, the plugin cache's `skills/` and migrated command skills, filtered by `config.toml`. Built from the catalogs in Codex's own session rollouts, not from its docs (decision 12).
+- Codex hook registration documented and installed on this machine in `~/.codex/hooks.json`. Live Codex run still pending.
+- 40 offline tests.
+
 ## 0.1.0 — 2026-09-20
 
 First working version, built and verified in one day.

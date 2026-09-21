@@ -12,6 +12,8 @@ First-day measurements on Node 24 under WSL, 2026-09-20. Prices at $0.042 per mi
 | `jev rank --files 'Projects/**/*.md' --chars 300`, 30 vault notes | 1 | 4.4k | 0.73 s including Node startup |
 | `grep -rn contrast src \| jev rank --lines`, 40 lines | 1 | 1.0k | ~0.5 s |
 | `jev ask`, one noul over a one-line diff | 1 | 295 | ~0.4 s |
+| Hook as Codex, 132-entry roster, the accessibility prompt | 2 | 10.0k | 0.99 s |
+| Hook with unknown agent, 183-entry union roster, same prompt | 2 | 13.0k | 1.06 s |
 
 The hook costs under a tenth of a cent per prompt. The suggestions were the expected skill in the two cases where one applied, and none in the knowledge-question case.
 
@@ -19,13 +21,16 @@ The hook costs under a tenth of a cent per prompt. The suggestions were the expe
 
 - Precision and recall of the hook over a labelled set of real prompts. The cookbook's numbers were measured on its own 488-request set against Claude Haiku, not here.
 - Ranking quality of `jev rank` beyond a handful of spot checks.
-- Anything under Codex.
+- The hook inside a live Codex session. Offline, with Codex's stdin shape, it ranks the Codex roster and suggests a Codex-invocable skill (`docs/cross-agent.md`).
 
 ## Tuning the hook from the log
 
 The log is `suggestions.jsonl` in the data directory (`~/.local/state/jev-agent-tools/` unless `CLAUDE_PLUGIN_DATA` names this plugin). After a week of ordinary use:
 
 ```bash
+# suggestions by skill, per agent
+jq -r '[.agent // "claude", .skill // "none"] | @tsv' ~/.local/state/jev-agent-tools/suggestions.jsonl | sort | uniq -c | sort -rn
+
 # suggestions by skill
 jq -r '.skill // "none"' ~/.local/state/jev-agent-tools/suggestions.jsonl | sort | uniq -c | sort -rn
 

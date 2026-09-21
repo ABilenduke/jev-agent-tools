@@ -36,7 +36,7 @@ jev --help
 | [docs/hook-skill-suggestion.md](docs/hook-skill-suggestion.md) | How the hook decides, roster sources and naming, logging, failure behaviour |
 | [docs/questions-and-thresholds.md](docs/questions-and-thresholds.md) | Every question Jev is asked and every threshold, with meaning |
 | [docs/install.md](docs/install.md) | Requirements, credentials and the key file, Claude Code, Codex, verification |
-| [docs/cross-agent.md](docs/cross-agent.md) | What is portable to which agents, evidence, the known gap |
+| [docs/cross-agent.md](docs/cross-agent.md) | What is portable to which agents, evidence, what is still unverified |
 | [docs/mcp-server.md](docs/mcp-server.md) | The optional server and how to register it |
 | [docs/decisions.md](docs/decisions.md) | Why it is this way: CLI over MCP, key handling, thresholds, naming |
 | [docs/evaluation-and-tuning.md](docs/evaluation-and-tuning.md) | Measured numbers and how to tune thresholds from the log |
@@ -51,6 +51,6 @@ jev --help
 
 ## Status
 
-0.1.0, 2026-09-20. 37 offline tests. Verified live on Claude Code: the command in all three input modes, the hook on three prompts, the optional MCP server through an SDK client. Not verified under Codex; the hook's roster loader only knows Claude Code skill locations (first roadmap item).
+0.2.0, 2026-09-20. 40 offline tests. Verified live on Claude Code: the command in all three input modes, the hook on three prompts, the optional MCP server through an SDK client. Under Codex the hook ranks Codex's own roster, checked offline against a real session catalog; the live run is pending on a Codex usage limit (`docs/cross-agent.md`).
 
 This is personal tooling. No company repository depends on it.

@@ -81,28 +81,95 @@ before(() => {
   write(join(cwd, '.claude/commands/vault-sync.md'), `---\ndescription: Run vault maintenance.\n---\nRitual.`);
   write(join(cwd, '.claude/skills/local-skill/SKILL.md'), skill('local-skill', 'Project skill.'));
   write(join(cwd, '.agents/skills/agents-skill/SKILL.md'), skill('agents-skill', 'Agents dir skill.'));
+
+  // Codex: user-level ~/.agents/skills, system skills, legacy ~/.codex/skills (not read by Codex 0.154)
+  write(join(home, '.agents/skills/user-agents-skill/SKILL.md'), skill('user-agents-skill', 'User-level agents skill.'));
+  write(join(home, '.codex/skills/.system/imagegen/SKILL.md'), skill('imagegen', 'Generate images.'));
+  write(join(home, '.codex/skills/legacy-skill/SKILL.md'), skill('legacy-skill', 'Legacy codex skill.'));
+
+  // Codex plugin cache: <marketplace>/<plugin>/<version>/{skills,commands,.codex-plugin/migrated-command-skills}
+  const codexCache = join(home, '.codex/plugins/cache');
+  write(join(codexCache, 'mk/superpowers/6.3.0/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent (codex).'));
+  write(join(codexCache, 'mk/superpowers/6.3.0/skills/newer-only/SKILL.md'), skill('newer-only', 'Only in the newer version.'));
+  write(join(codexCache, 'mk/superpowers/5.0.0/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent (old).'));
+  write(join(codexCache, 'mk/superpowers/5.0.0/skills/older-only/SKILL.md'), skill('older-only', 'Only in the older version.'));
+  write(join(codexCache, 'mk/ralph/1.0.0/commands/help.md'), `---\ndescription: Explain ralph.\n---\nHelp.`);
+  write(join(codexCache, 'mk/ralph/1.0.0/.codex-plugin/migrated-command-skills/source-command-help/SKILL.md'), skill('source-command-help', 'Explain ralph.'));
+  write(join(codexCache, 'mk/cmd-only/local/commands/review.md'), `---\ndescription: Review code.\n---\nReview.`);
+  write(join(codexCache, 'mk/off/1.0.0/skills/off-skill/SKILL.md'), skill('off-skill', 'Disabled codex plugin.'));
+  write(join(codexCache, 'orphan/gone/1.0.0/skills/gone-skill/SKILL.md'), skill('gone-skill', 'Marketplace no longer declared.'));
+  write(join(codexCache, 'openai-curated-remote/vercel/0.21.4/skills/nextjs/SKILL.md'), skill('nextjs', 'Next.js guidance.'));
+  write(
+    join(home, '.codex/config.toml'),
+    [
+      '[marketplaces.mk]',
+      'source = "https://example.invalid/mk.git"',
+      '',
+      '[plugins."superpowers@mk"]',
+      'enabled = true',
+      '',
+      '[plugins."ralph@mk"]',
+      'enabled = true',
+      '',
+      '[plugins."cmd-only@mk"]',
+      'enabled = true',
+      '',
+      '[plugins."off@mk"]',
+      'enabled = false',
+      '',
+      '[plugins."gone@orphan"]',
+      'enabled = true',
+      '',
+    ].join('\n'),
+  );
 });
 
 after(() => {
   for (const d of [home, cwd, other]) rmSync(d, { recursive: true, force: true });
 });
 
-test('loadRoster gathers user, synced, plugin, registry and project entries with namespaced names', async () => {
+const CLAUDE_NAMES = [
+  'agents-skill',
+  'superpowers:brainstorming',
+  'cylinder-design',
+  'anthropic-skills:docx',
+  'design:accessibility-review',
+  'pdf-viewer:open',
+  'proj:here',
+  'jev:jev-tools',
+  'local-skill',
+  'superpowers:write-plan',
+  'vault-sync',
+].sort();
+
+const CODEX_NAMES = [
+  'agents-skill',
+  'user-agents-skill',
+  'imagegen',
+  'superpowers:brainstorming',
+  'superpowers:newer-only',
+  'superpowers:older-only',
+  'ralph:source-command-help',
+  'vercel:nextjs',
+].sort();
+
+test('loadRoster for claude gathers user, synced, plugin, registry and project entries with namespaced names', async () => {
+  const roster = await loadRoster({ home, cwd, agent: 'claude' });
+  assert.deepEqual(roster.map((e) => e.name).sort(), CLAUDE_NAMES);
+});
+
+test('loadRoster for codex gathers ~/.agents, system, enabled plugin-cache and project entries; skips legacy, commands, disabled and orphaned', async () => {
+  const roster = await loadRoster({ home, cwd, agent: 'codex' });
+  assert.deepEqual(roster.map((e) => e.name).sort(), CODEX_NAMES);
+  // newest version wins the name
+  assert.equal(roster.find((e) => e.name === 'superpowers:brainstorming')?.description, 'Explore intent (codex).');
+  assert.equal(roster.find((e) => e.name === 'ralph:source-command-help')?.kind, 'skill');
+});
+
+test('loadRoster with no agent returns the union, claude entries first', async () => {
   const roster = await loadRoster({ home, cwd });
-  const names = roster.map((e) => e.name).sort();
-  assert.deepEqual(names, [
-    'agents-skill',
-    'superpowers:brainstorming',
-    'cylinder-design',
-    'anthropic-skills:docx',
-    'design:accessibility-review',
-    'pdf-viewer:open',
-    'proj:here',
-    'jev:jev-tools',
-    'local-skill',
-    'superpowers:write-plan',
-    'vault-sync',
-  ].sort());
+  assert.deepEqual(roster.map((e) => e.name).sort(), [...new Set([...CLAUDE_NAMES, ...CODEX_NAMES])].sort());
+  assert.equal(roster.find((e) => e.name === 'superpowers:brainstorming')?.description, 'Explore intent.');
 });
 
 test('loadRoster drops entries without a description and marks commands', async () => {

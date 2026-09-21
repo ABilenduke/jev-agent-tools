@@ -73,3 +73,13 @@ Dated, in the order they were made. Each records what was chosen, what was rejec
 **Chosen.** Re-read roster files on every hook run; never cache Jev answers.
 
 **Why.** About 90 small files read in milliseconds; a cache is one more thing to invalidate. Answers are cheap and state changes between calls.
+
+## 12. Codex roster from observed catalogs; agent detected from hook stdin
+
+**Chosen.** `loadRoster` takes an `agent`. The hook sets it from stdin: `transcript_path` means Claude Code, `turn_id` means Codex, neither means `unknown` and the union of both rosters. The Codex sources are the ones Codex's own session rollouts list as skill roots on this machine (codex-cli 0.154): `~/.agents/skills`, `~/.codex/skills/.system`, the plugin cache's `skills/` and `.codex-plugin/migrated-command-skills/`, and `<cwd>/.agents/skills`. Plugins are filtered by `enabled = false` and by whether their marketplace is still declared in `config.toml`, with the remote marketplace always in. `config.toml` is scanned by line for table headers and `enabled` only.
+
+**Rejected.** The roadmap's list, which included legacy `~/.codex/skills/<name>`: that directory holds a valid skill here and appears in none of the twelve latest session catalogs, so Codex 0.154 does not read it and ranking it would suggest something the agent cannot load. Plugin `commands/*.md` under Codex, for the same reason. Reading the catalog out of the current session's rollout at hook time: exact, but the rollout is an internal format and may not yet contain the catalog when the first prompt's hook runs. A TOML parser dependency for two fields.
+
+**Known imprecision.** The loader reproduces the latest real catalog (111 entries) plus 21 Codex hides without any visible marker: the 20 skills of the remote `openai-templates` plugin, which `codex plugin list` reports installed and enabled, and the system skill `review-agent`. Accepted until a real prompt is mis-suggested to one of them; the log's `agent` and `skill` fields will show it.
+
+**Why.** Andrew asked for the hook to be correct under Codex. The catalog Codex writes into its rollouts is better evidence than its documentation, which lists locations this version does not read and omits the plugin naming. Detecting the agent was thought impossible when `docs/cross-agent.md` was first written; the stdin field lists of the two harnesses differ, and the offline run shows the same prompt suggesting `design:accessibility-review` under Claude Code and `vercel:react-best-practices` under Codex, each invocable where it is suggested.

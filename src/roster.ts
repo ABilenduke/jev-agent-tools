@@ -1,7 +1,7 @@
 /**
- * Enumerate the skills and slash commands Claude Code can load in this session.
+ * Enumerate the skills and slash commands the running agent can load in this session.
  *
- * Sources, in the order Claude Code itself surfaces them:
+ * Claude Code sources, in the order Claude Code itself surfaces them:
  *   ~/.claude/skills/<name>/SKILL.md            user skills
  *   ~/.claude/skills/synced/<bucket>/<name>/    account-synced skills -> "anthropic-skills:<name>"
  *   ~/.claude/plugins/synced/<bucket>/<plugin>/  account-synced plugins -> "<plugin>:<skill>"
@@ -9,7 +9,17 @@
  *   ~/.claude/plugins/installed_plugins.json    marketplace plugins (user scope, or this project)
  *   <cwd>/.claude/skills, .claude/commands, .agents/skills
  *
- * Names are namespaced the way the session catalog shows them so a suggestion can be
+ * Codex sources, as its session catalog lists them (codex-cli 0.154):
+ *   ~/.agents/skills/<name>/SKILL.md            user skills
+ *   ~/.codex/skills/.system/<name>/SKILL.md     bundled system skills
+ *   ~/.codex/plugins/cache/<mkt>/<plugin>/<ver>/skills/<skill>/           -> "<plugin>:<skill>"
+ *   ~/.codex/plugins/cache/<mkt>/<plugin>/<ver>/.codex-plugin/migrated-command-skills/<dir>/ -> "<plugin>:<dir>"
+ *   <cwd>/.agents/skills
+ * A cached plugin counts only if config.toml does not disable it and its marketplace is still
+ * declared there, or it comes from the account-managed remote marketplace. Legacy
+ * ~/.codex/skills/<name> and plugin commands/ are not in the Codex catalog and are skipped.
+ *
+ * Names are namespaced the way each session catalog shows them so a suggestion can be
  * invoked verbatim.
  */
 import { readdir, readFile, stat } from 'node:fs/promises';
@@ -197,13 +207,80 @@ async function userSkillEntries(home: string): Promise<RosterEntry[]> {
   return out;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Codex
+// ---------------------------------------------------------------------------------------------
+
+/** Codex's account-managed marketplace; its plugins have no config.toml entry and are all active. */
+export const CODEX_REMOTE_MARKETPLACE = 'openai-curated-remote';
+
+interface CodexPluginConfig {
+  readonly marketplaces: ReadonlySet<string>;
+  /** `<plugin>@<marketplace>` -> enabled, for every `[plugins."..."]` table that sets it. */
+  readonly enabled: ReadonlyMap<string, boolean>;
+}
+
+/**
+ * The two things this tool needs from `~/.codex/config.toml`: which marketplaces are declared and
+ * which plugins are switched off. A line scanner, not a TOML parser; the file may hold other
+ * settings and is never logged.
+ */
+export function parseCodexConfig(toml: string): CodexPluginConfig {
+  const marketplaces = new Set<string>();
+  const enabled = new Map<string, boolean>();
+  let plugin: string | undefined;
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.trim();
+    const header = /^\[(.+)\]$/.exec(line);
+    if (header) {
+      plugin = undefined;
+      const mk = /^marketplaces\.(?:"([^"]+)"|([^.\s]+))$/.exec(header[1]!);
+      if (mk) marketplaces.add(mk[1] ?? mk[2]!);
+      const pl = /^plugins\."([^"]+)"$/.exec(header[1]!);
+      if (pl) plugin = pl[1];
+      continue;
+    }
+    if (!plugin) continue;
+    const kv = /^enabled\s*=\s*(true|false)\b/.exec(line);
+    if (kv) enabled.set(plugin, kv[1] === 'true');
+  }
+  return { marketplaces, enabled };
+}
+
+async function codexPluginEntries(home: string): Promise<RosterEntry[]> {
+  const config = parseCodexConfig((await readOptional(join(home, '.codex', 'config.toml'))) ?? '');
+  const cache = join(home, '.codex', 'plugins', 'cache');
+  const out: RosterEntry[] = [];
+  for (const marketplace of await listDirs(cache)) {
+    if (!config.marketplaces.has(marketplace) && marketplace !== CODEX_REMOTE_MARKETPLACE) continue;
+    for (const plugin of await listDirs(join(cache, marketplace))) {
+      if (config.enabled.get(`${plugin}@${marketplace}`) === false) continue;
+      const versions = (await listDirs(join(cache, marketplace, plugin))).sort().reverse();
+      for (const version of versions) {
+        const root = join(cache, marketplace, plugin, version);
+        out.push(...(await skillsUnder(join(root, 'skills'), `${plugin}:`)));
+        out.push(...(await skillsUnder(join(root, '.codex-plugin', 'migrated-command-skills'), `${plugin}:`)));
+      }
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------------------------
+
+export type Agent = 'claude' | 'codex' | 'unknown';
+
 export interface LoadRosterOptions {
   readonly home: string;
   readonly cwd: string;
+  /** Which harness is running the hook; `unknown` (the default) takes the union of both rosters. */
+  readonly agent?: Agent;
 }
 
-export async function loadRoster({ home, cwd }: LoadRosterOptions): Promise<RosterEntry[]> {
-  const all = [
+async function claudeEntries(home: string, cwd: string): Promise<RosterEntry[]> {
+  return [
     ...(await userSkillEntries(home)),
     ...(await installedPluginEntries(home, cwd)),
     ...(await syncedPluginEntries(home)),
@@ -211,6 +288,21 @@ export async function loadRoster({ home, cwd }: LoadRosterOptions): Promise<Rost
     ...(await commandsUnder(join(cwd, '.claude', 'commands'))),
     ...(await skillsUnder(join(cwd, '.agents', 'skills'))),
   ];
+}
+
+async function codexEntries(home: string, cwd: string): Promise<RosterEntry[]> {
+  return [
+    ...(await skillsUnder(join(home, '.agents', 'skills'))),
+    ...(await skillsUnder(join(home, '.codex', 'skills', '.system'))),
+    ...(await codexPluginEntries(home)),
+    ...(await skillsUnder(join(cwd, '.agents', 'skills'))),
+  ];
+}
+
+export async function loadRoster({ home, cwd, agent = 'unknown' }: LoadRosterOptions): Promise<RosterEntry[]> {
+  const all: RosterEntry[] = [];
+  if (agent !== 'codex') all.push(...(await claudeEntries(home, cwd)));
+  if (agent !== 'claude') all.push(...(await codexEntries(home, cwd)));
   const byName = new Map<string, RosterEntry>();
   for (const entry of all) if (!byName.has(entry.name)) byName.set(entry.name, entry);
   return [...byName.values()];

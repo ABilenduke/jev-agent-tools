@@ -65,7 +65,25 @@ The command needs nothing beyond PATH. For the skill:
 ln -s ~/code/abilenduke/jev-agent-tools/skills/jev-tools ~/.agents/skills/jev-tools
 ```
 
-For the hook, add the `UserPromptSubmit` entry from `hooks/hooks.json` to `~/.codex/hooks.json`, replacing `${CLAUDE_PLUGIN_ROOT}` with the repo path if Codex does not expand it in that file. Codex documents the same stdin fields and honours `hookSpecificOutput.additionalContext`. Known gap: the roster loader enumerates Claude Code locations only, so the suggestions will name Claude's skills. See `docs/roadmap.md`.
+For the hook, `~/.codex/hooks.json` (created on this machine 2026-09-20):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "node /home/abilenduke/code/abilenduke/jev-agent-tools/dist/hooks/skill-suggest.js", "timeout": 10 } ] }
+    ]
+  }
+}
+```
+
+The path is absolute because `CLAUDE_PLUGIN_ROOT` is only set for plugin hooks. Codex keeps a `trusted_hash` per hook in `config.toml` and asks once, in an interactive session, before running a new one. The hook recognises Codex from the `turn_id` field in its stdin and ranks Codex's roster (`docs/hook-skill-suggestion.md`).
+
+`codex` is not on PATH here; the binary ships inside the VS Code extension:
+
+```bash
+alias codex=~/.vscode-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex
+```
 
 ## Other agents
 
@@ -79,4 +97,4 @@ printf 'a.md:1: apples\nb.md:1: bolts\n' | jev rank --query "hardware" --lines
 echo '{"prompt":"audit the accessibility of the button","cwd":"'"$PWD"'"}' | node dist/hooks/skill-suggest.js
 ```
 
-The first two print JSON with probabilities. The third prints the hook's JSON with a `<skill_relevance>` block, and appends a line to `~/.local/state/jev-agent-tools/suggestions.jsonl`.
+The first two print JSON with probabilities. The third prints the hook's JSON with a `<skill_relevance>` block, and appends a line to `~/.local/state/jev-agent-tools/suggestions.jsonl` with `"agent":"unknown"`. Add `"turn_id":"x"` to the input to see the Codex roster ranked, or `"transcript_path":"x"` for Claude Code's.

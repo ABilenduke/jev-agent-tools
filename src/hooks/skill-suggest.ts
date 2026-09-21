@@ -25,7 +25,7 @@ import {
   suggestShortlistQuestions,
   suggestWideQuestions,
 } from '../questions.js';
-import { loadRoster, type RosterEntry } from '../roster.js';
+import { loadRoster, type Agent, type RosterEntry } from '../roster.js';
 
 export const MIN_PROMPT_CHARS = 12;
 
@@ -75,6 +75,16 @@ export async function suggest(judge: Judge, roster: readonly RosterEntry[], prom
   return { skill, gate, shortlist: ranked, fit, requests: 2, inputTokens };
 }
 
+/**
+ * Which harness sent the prompt. Claude Code's UserPromptSubmit input carries `transcript_path`;
+ * Codex's carries `turn_id` and no transcript. Anything else gets the union roster.
+ */
+export function detectAgent(input: { readonly transcript_path?: unknown; readonly turn_id?: unknown }): Agent {
+  if (typeof input.transcript_path === 'string' && input.transcript_path.length > 0) return 'claude';
+  if (typeof input.turn_id === 'string' && input.turn_id.length > 0) return 'codex';
+  return 'unknown';
+}
+
 export function hookOutput(skill: string | null): unknown {
   const text =
     skill === null
@@ -117,17 +127,19 @@ async function readStdin(): Promise<string> {
 
 async function main(): Promise<void> {
   const started = Date.now();
-  const input = JSON.parse(await readStdin()) as { prompt?: string; cwd?: string };
+  const input = JSON.parse(await readStdin()) as { prompt?: string; cwd?: string; transcript_path?: string; turn_id?: string };
   const prompt = input.prompt ?? '';
   if (shouldSkip(prompt)) return;
   const judge = createJudge();
-  const roster = await loadRoster({ home: homedir(), cwd: input.cwd ?? process.cwd() });
+  const agent = detectAgent(input);
+  const roster = await loadRoster({ home: homedir(), cwd: input.cwd ?? process.cwd(), agent });
   const result = await suggest(judge, roster, prompt);
   process.stdout.write(JSON.stringify(hookOutput(result.skill)));
   await log({
     at: new Date().toISOString(),
     prompt_sha256: createHash('sha256').update(prompt).digest('hex').slice(0, 16),
     prompt_chars: prompt.length,
+    agent,
     roster_size: roster.length,
     ...result,
     latency_ms: Date.now() - started,
