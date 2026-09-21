@@ -61,8 +61,8 @@ export const SUGGEST_FIT = 0.3;
 export const SUGGEST_SHORTLIST = 3;
 /** Characters of description used in the wide first pass. */
 export const SUGGEST_WIDE_DESCRIPTION_CHARS = 240;
-/** Characters of skill body appended to the description in the shortlist pass. */
-export const SUGGEST_BODY_CHARS = 600;
+/** Characters of skill body appended to the description in the shortlist pass. Cookbook value (decision 13). */
+export const SUGGEST_BODY_CHARS = 700;
 
 export interface SuggestCandidate {
   readonly name: string;

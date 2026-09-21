@@ -67,7 +67,7 @@ which: Choice over every roster name (descriptions truncated to 240 chars)
 acts_on_user_system, would_follow_documented_procedure, prose_suffices: Nouls
    │  gate = mean(acts, follows, 1 - prose); stop if gate < 0.30
    ▼  request 2, same state
-which: Choice over top 3 (full description + 600 chars of body)
+which: Choice over top 3 (full description + 700 chars of body)
 fits::<name>: one Noul per shortlisted skill
    │  suggest Choice winner if max(fits) >= 0.30, else nothing
    ▼

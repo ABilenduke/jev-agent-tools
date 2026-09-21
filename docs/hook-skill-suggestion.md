@@ -49,7 +49,7 @@ The gate is the mean of the first two and `1 - prose_suffices`. If the gate is b
 
 **Request 2, shortlist pass.** The top `SUGGEST_SHORTLIST` (3) names from the wide Choice.
 
-- `which`: a Choice over the three, each described by its full description plus the first 600 characters of its SKILL.md body.
+- `which`: a Choice over the three, each described by its full description plus the first 700 characters of its SKILL.md body.
 - `fits::<name>`: one Noul per shortlisted skill asking whether it performs the specific task requested. The instructions carry the skill name and description as a structured object.
 
 If the best `fits` probability is below `SUGGEST_FIT` (0.30) nothing is suggested. Otherwise the shortlist Choice winner is suggested.

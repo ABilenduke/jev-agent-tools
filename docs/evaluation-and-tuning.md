@@ -23,6 +23,30 @@ The hook costs under a tenth of a cent per prompt. The suggestions were the expe
 - Ranking quality of `jev rank` beyond a handful of spot checks.
 - The hook inside a live Codex session. Offline, with Codex's stdin shape, it ranks the Codex roster and suggests a Codex-invocable skill (`docs/cross-agent.md`).
 
+## Cookbook conformance review, 2026-09-20
+
+The questions and constants in `src/questions.ts` were checked against the three cookbooks they cite (skill suggestion, line-by-line search, re-ranking) and the state, Noul and Choice guidance pages, read verbatim from docs.typesafe.ai. Jev itself judged the question comparisons through `jev ask`.
+
+Constants: gate 0.30, fit 0.30, shortlist 3, window 255, present 0.70, absent 0.35 and concurrency 12 all match. The shortlist body excerpt was 600 against the cookbook's 700 and is now 700 (decision 13).
+
+Question equivalence, as Jev probabilities that the project's question asks the same judgment as the cookbook's, over the two verbatim texts:
+
+| Question | Same judgment |
+|---|---|
+| `acts_on_user_system` | 0.96 |
+| `prose_suffices` | 0.96 |
+| `would_follow_documented_procedure` | 0.95 |
+| shortlist `which` | 0.88 |
+| rerank `matches` versus the re-ranking cookbook's Noul | 0.88 |
+| `fits` | 0.71 |
+| wide `which` (the project drops "if any"; 0.41 that this matters given the gate) | 0.68 |
+| `exists` versus the line-search presence Noul | 0.52 |
+| `best` versus "which line contains the answer" | 0.43 |
+
+The two `jev rank` questions are a deliberate generalisation and are documented as such in `docs/questions-and-thresholds.md`.
+
+Method note: Jev was poor at the design-level questions ("does this question obey the Noul rules"): a Score over the whole set came back flat with zero confidence. Pairwise "do these two texts ask the same judgment" questions were decisive. Use Jev for comparisons over evidence, not for reviewing question design.
+
 ## Tuning the hook from the log
 
 The log is `suggestions.jsonl` in the data directory (`~/.local/state/jev-agent-tools/` unless `CLAUDE_PLUGIN_DATA` names this plugin). After a week of ordinary use:

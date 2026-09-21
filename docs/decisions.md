@@ -83,3 +83,9 @@ Dated, in the order they were made. Each records what was chosen, what was rejec
 **Known imprecision.** The loader reproduces the latest real catalog (111 entries) plus 21 Codex hides without any visible marker: the 20 skills of the remote `openai-templates` plugin, which `codex plugin list` reports installed and enabled, and the system skill `review-agent`. Accepted until a real prompt is mis-suggested to one of them; the log's `agent` and `skill` fields will show it.
 
 **Why.** Andrew asked for the hook to be correct under Codex. The catalog Codex writes into its rollouts is better evidence than its documentation, which lists locations this version does not read and omits the plugin naming. Detecting the agent was thought impossible when `docs/cross-agent.md` was first written; the stdin field lists of the two harnesses differ, and the offline run shows the same prompt suggesting `design:accessibility-review` under Claude Code and `vercel:react-best-practices` under Codex, each invocable where it is suggested.
+
+## 13. Shortlist body excerpt aligned to the cookbook's 700 characters
+
+**Chosen.** `SUGGEST_BODY_CHARS` goes from 600 to 700.
+
+**Why.** A conformance review against TypeSafe's cookbooks (`docs/evaluation-and-tuning.md`, 2026-09-20) found this the only constant that differed from its cookbook source without a recorded reason. Every threshold here is still an untuned cookbook default, so an unexplained deviation from the one measured configuration is worse than none. The review also recorded that the `jev rank` questions generalise the line-by-line search cookbook rather than copy it, and that rerank mode's `exists` is this project's own heuristic; both are now stated in `docs/questions-and-thresholds.md`.

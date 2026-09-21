@@ -50,6 +50,15 @@ JSON
 
 Read probabilities, not just the winner. A noul near 0.5 means genuinely uncertain, not medium.
 
+## Designing questions for `jev ask`
+
+The `typesafe` skill, when installed, is the maintained guide to writing state and questions; prefer it. Without it, read the live docs rather than guessing: the index at https://docs.typesafe.ai/llms.txt lists every page, and any page serves Markdown when `.md` is appended to its path.
+
+- Primitives: [noul](https://docs.typesafe.ai/primitives/noul.md), [choice](https://docs.typesafe.ai/primitives/choice.md), [score](https://docs.typesafe.ai/primitives/score.md); [state](https://docs.typesafe.ai/concepts/state.md) for shaping the input.
+- Cookbooks: the [index](https://docs.typesafe.ai/cookbooks) has worked recipes. This command implements [skill suggestion](https://docs.typesafe.ai/cookbooks/skill_suggestion.md), [line-by-line search](https://docs.typesafe.ai/cookbooks/semantic_find.md) and [re-ranking](https://docs.typesafe.ai/cookbooks/rerank_typesafe.md); its reviewed question text is in `docs/questions-and-thresholds.md` next to this skill's repo.
+
+This is for questions you pass to the command. Building an application that calls TypeSafe is a different task; use the `typesafe` skill for that.
+
 ## Exit codes
 
 0 ok, 1 runtime failure (network, missing key: set `TYPESAFE_API_KEY` or write `~/.config/typesafe/api_key`), 2 usage error with usage on stderr.

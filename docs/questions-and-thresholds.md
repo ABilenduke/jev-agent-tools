@@ -20,6 +20,8 @@ TypeSafe's own guidance: the most important thing for a human to review is the q
 | `EXISTS_PARTIAL` | 0.35 | At or above this but below present: `partial`. Below: `absent`. |
 | `RERANK_CONCURRENCY` | 12 | Parallel requests in rerank mode. The cookbook used 12 workers; the API limit is 1,200 requests per minute. |
 
+The constants follow TypeSafe's line-by-line search cookbook exactly. The questions do not: that cookbook asks "which line of the document contains the answer" with the query inside the instructions, while `jev rank` asks which candidate best answers or satisfies a `query` held in state, so it works over files, grep lines and arbitrary JSON candidates. The cookbook's measured results therefore do not transfer to `jev rank` as evidence. In rerank mode `exists` is the highest per-candidate probability, a heuristic of this project with no cookbook basis.
+
 **Window mode** (`rankWindowQuestions`), state `{ query, candidates: [{id, text}] }`:
 
 - `best` (Choice over ids): "Which candidate in `candidates` best answers or satisfies `query`? Judge by meaning, not by shared words. Each option is a candidate id."
@@ -37,7 +39,7 @@ TypeSafe's own guidance: the most important thing for a human to review is the q
 | `SUGGEST_FIT` | 0.30 | Best shortlist `fits` probability must reach this for the winner to be suggested. Cookbook value. |
 | `SUGGEST_SHORTLIST` | 3 | Candidates carried into the second request. |
 | `SUGGEST_WIDE_DESCRIPTION_CHARS` | 240 | Description length in the wide pass, approximating what the agent's own catalog shows. |
-| `SUGGEST_BODY_CHARS` | 600 | Body excerpt appended to the description in the shortlist pass. |
+| `SUGGEST_BODY_CHARS` | 700 | Body excerpt appended to the description in the shortlist pass. Cookbook value; was 600 until the 2026-09-20 conformance review (decision 13). |
 | `MIN_PROMPT_CHARS` (in the hook) | 12 | Shorter prompts are skipped. |
 
 **Wide pass** (`suggestWideQuestions`), state `{ request }`:

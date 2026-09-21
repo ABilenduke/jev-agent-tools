@@ -6,6 +6,7 @@ The repo is named `jev-agent-tools` because the intent is any coding agent, not 
 |---|---|---|---|---|
 | `jev` command | yes | yes, nothing to register | yes | no; use the MCP server |
 | `jev-tools` skill | yes, via the plugin | yes, symlink into `~/.agents/skills` | yes if the agent reads Agent Skills (`SKILL.md`) | depends |
+| Question-design guidance | the `typesafe` skill if installed; otherwise the doc links carried in `jev-tools` | same | same | same |
 | Skill-suggestion hook | yes, verified live | yes: detects Codex from the hook input and ranks Codex's own roster; registered in `~/.codex/hooks.json`; verified offline against a real session catalog, live run pending (see below) | mostly no; prompt hooks are uncommon | no |
 | MCP server | opt-in, verified live with an SDK client | opt-in, `codex mcp add`; not verified live | if the agent speaks MCP | yes |
 
