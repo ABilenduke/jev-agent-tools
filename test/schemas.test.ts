@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { askInput, rankInput } from '../src/schemas.js';
+import { askInput, rankInput, checkInput, classifyInput } from '../src/schemas.js';
 
 test('askInput accepts each question type and rejects unknown types', () => {
   const ok = askInput.safeParse({
@@ -28,4 +28,19 @@ test('rankInput requires candidates with id and text and defaults mode', () => {
   assert.equal(rankInput.safeParse({ query: 'q', candidates: [] }).success, false);
   assert.equal(rankInput.safeParse({ query: 'q', candidates: [{ id: 'a' }] }).success, false);
   assert.equal(rankInput.safeParse({ query: 'q', candidates: [{ id: 'a', text: 't' }], mode: 'fast' }).success, false);
+});
+
+test('checkInput needs a subject and at least one non-empty condition', () => {
+  assert.equal(checkInput.safeParse({ subject: 'diff', conditions: ['adds an export'] }).success, true);
+  assert.equal(checkInput.safeParse({ subject: { a: 1 }, conditions: ['x'] }).success, true);
+  assert.equal(checkInput.safeParse({ subject: 'diff', conditions: [] }).success, false);
+  assert.equal(checkInput.safeParse({ subject: 'diff', conditions: [''] }).success, false);
+});
+
+test('classifyInput needs two options and candidates', () => {
+  const candidates = [{ id: 'a', text: 't' }];
+  assert.equal(classifyInput.safeParse({ options: { bug: 'a defect', docs: null }, candidates }).success, true);
+  assert.equal(classifyInput.safeParse({ query: 'kind of change', options: { bug: null, docs: null }, candidates }).success, true);
+  assert.equal(classifyInput.safeParse({ options: { bug: null }, candidates }).success, false);
+  assert.equal(classifyInput.safeParse({ options: { bug: null, docs: null }, candidates: [] }).success, false);
 });

@@ -11,7 +11,10 @@ import type { ChoiceQuestion, NoulQuestion } from '@typesafe-ai/sdk';
 // jev_rank
 // ---------------------------------------------------------------------------------------------
 
-/** Most candidate ids one Choice question carries; beyond this, rank per candidate instead. */
+/**
+ * Most options one Choice question accepts (the API's limit). `jev rank` falls back to one request
+ * per candidate beyond it; the hook's wide pass splits the roster into Choices of at most this many.
+ */
 export const WINDOW_MAX = 255;
 
 /** `exists` at or above this: the query is answered by at least one candidate. */
@@ -21,6 +24,12 @@ export const EXISTS_PARTIAL = 0.35;
 
 /** How many per-candidate requests run at once in rerank mode. Well under the 1,200/min limit. */
 export const RERANK_CONCURRENCY = 12;
+
+/**
+ * Most candidates `jev rank` accepts unless `--max` raises it. Above `WINDOW_MAX` every candidate
+ * is its own request, so this bounds a mistaken glob to about a minute of requests (decision 17).
+ */
+export const MAX_CANDIDATES = 1_000;
 
 export function rankWindowQuestions(ids: readonly string[]): {
   best: ChoiceQuestion<Record<string, null>>;
@@ -50,6 +59,69 @@ export function rankPairQuestions(): { matches: NoulQuestion } {
 }
 
 // ---------------------------------------------------------------------------------------------
+// jev check
+// ---------------------------------------------------------------------------------------------
+
+/** A condition's probability at or above this reads as `true`. */
+export const CHECK_TRUE = 0.7;
+/** At or below this reads as `false`; between the two thresholds, `unsure`. */
+export const CHECK_FALSE = 0.3;
+
+/**
+ * One Noul per condition over state `{ subject }`, keyed `c0`, `c1`, ... The condition travels in
+ * the instructions, as `fits::` does for skills, so the agent writes a sentence and never a
+ * question. "Not shown" is false: a check asks what the subject shows, not what is conceivable.
+ */
+export function checkQuestions(conditions: readonly string[]): Record<string, NoulQuestion> {
+  const questions: Record<string, NoulQuestion> = {};
+  conditions.forEach((condition, i) => {
+    questions[`c${i}`] = noul(
+      { question: 'Does `subject` show that this condition holds?', condition },
+      {
+        true: 'The subject shows that the condition holds.',
+        false: 'The subject does not show that the condition holds, or shows that it does not.',
+      },
+    );
+  });
+  return questions;
+}
+
+// ---------------------------------------------------------------------------------------------
+// jev classify
+// ---------------------------------------------------------------------------------------------
+
+/** The escape option every classification gets unless the caller supplies one named `none`. */
+export const CLASSIFY_NONE = 'none';
+export const CLASSIFY_NONE_DESCRIPTION = 'None of the other options fits the item.';
+
+/**
+ * One Choice per item over state `{ item }` or `{ query, item }`. A Choice always picks an option,
+ * so `none` is added: TypeSafe's Choice guidance is to include one whenever nothing may fit.
+ */
+export function classifyQuestions(
+  options: Readonly<Record<string, string | null>>,
+  withQuery: boolean,
+): { label: ChoiceQuestion<Record<string, string | null>> } {
+  const criteria: Record<string, string | null> = { ...options };
+  if (!Object.keys(criteria).some((k) => k.toLowerCase() === CLASSIFY_NONE)) criteria[CLASSIFY_NONE] = CLASSIFY_NONE_DESCRIPTION;
+  const question = withQuery ? 'Which option best answers `query` for `item.text`?' : 'Which option best describes `item.text`?';
+  return {
+    label: choice(`${question} Judge by meaning, not by shared words. Each option is a label, with a description where one was given.`, criteria),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// jev ask warnings
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * State larger than this draws a warning from `jev ask` and `jev check`. About 15k tokens, half the
+ * 32k allowed for state plus the longest question; accuracy falls with unrelated context well
+ * before the limit.
+ */
+export const STATE_WARN_CHARS = 60_000;
+
+// ---------------------------------------------------------------------------------------------
 // Skill suggestion (UserPromptSubmit hook)
 // ---------------------------------------------------------------------------------------------
 
@@ -69,19 +141,36 @@ export interface SuggestCandidate {
   readonly description: string;
 }
 
-export function suggestWideQuestions(candidates: readonly SuggestCandidate[]): {
-  which: ChoiceQuestion<Record<string, string>>;
-  acts_on_user_system: NoulQuestion;
-  would_follow_documented_procedure: NoulQuestion;
-  prose_suffices: NoulQuestion;
-} {
-  const criteria: Record<string, string> = {};
-  for (const c of candidates) criteria[c.name] = c.description.slice(0, SUGGEST_WIDE_DESCRIPTION_CHARS);
-  return {
-    which: choice(
+/** The wide pass's gate Nouls, by question id. */
+export const SUGGEST_GATE_QUESTIONS = ['acts_on_user_system', 'would_follow_documented_procedure', 'prose_suffices'] as const;
+
+/**
+ * Split a roster into balanced chunks of at most `WINDOW_MAX`, one wide Choice each. A roster that
+ * fits in one Choice is one chunk, asked as `which`; more are asked as `which::0`, `which::1`, ...
+ * in the same request (decision 16).
+ */
+export function suggestWideChunks<T>(candidates: readonly T[]): T[][] {
+  const count = Math.max(1, Math.ceil(candidates.length / WINDOW_MAX));
+  const size = Math.ceil(candidates.length / count);
+  return Array.from({ length: count }, (_, i) => candidates.slice(i * size, (i + 1) * size));
+}
+
+export function suggestWideQuestions(candidates: readonly SuggestCandidate[]): Record<
+  string,
+  ChoiceQuestion<Record<string, string>> | NoulQuestion
+> {
+  const chunks = suggestWideChunks(candidates);
+  const which: Record<string, ChoiceQuestion<Record<string, string>>> = {};
+  chunks.forEach((chunk, i) => {
+    const criteria: Record<string, string> = {};
+    for (const c of chunk) criteria[c.name] = c.description.slice(0, SUGGEST_WIDE_DESCRIPTION_CHARS);
+    which[chunks.length === 1 ? 'which' : `which::${i}`] = choice(
       'Which skill best fits `request`? Each option is a skill name with a description of when it should be used.',
       criteria,
-    ),
+    );
+  });
+  return {
+    ...which,
     acts_on_user_system: noul(
       'Does `request` ask the assistant to do something on the user\'s systems, files, or accounts, rather than only answer from knowledge?',
     ),

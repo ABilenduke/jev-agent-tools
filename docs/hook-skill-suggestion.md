@@ -32,7 +32,7 @@ Claude Code loads it with the plugin. Codex reads the same file format from `~/.
 
 ## Input
 
-Hook stdin JSON. Fields used: `prompt`, `cwd`, and two that identify the harness: Claude Code sends `transcript_path`, Codex sends `turn_id` and no transcript. `transcript_path` wins, then `turn_id`, else the agent is `unknown` and both rosters are ranked as one. The hook skips silently when the trimmed prompt is under 12 characters or starts with `/` (a slash command already names its skill).
+Hook stdin JSON. Fields used: `prompt`, `cwd` (the process's own directory if absent), and two that identify the harness: Claude Code sends `transcript_path`, Codex sends `turn_id` and no transcript. `transcript_path` wins, then `turn_id`, else the agent is `unknown` and both rosters are ranked as one. The hook skips silently when the trimmed prompt is under 12 characters or starts with `/` (a slash command already names its skill).
 
 ## The two requests
 
@@ -40,14 +40,14 @@ Both use `state = { request: <prompt> }`. Question text is in `src/questions.ts`
 
 **Request 1, wide pass.**
 
-- `which`: a Choice over every roster name; each option's description is truncated to 240 characters, roughly what the agent itself sees in its catalog.
+- `which`: a Choice over every roster name; each option's description is truncated to 240 characters, roughly what the agent itself sees in its catalog. A Choice accepts at most 255 options, so a larger roster is split into balanced chunks asked as `which::0`, `which::1`, ... in the same request (decision 16).
 - `acts_on_user_system`: does the request ask for action on the user's systems, files or accounts?
 - `would_follow_documented_procedure`: would a competent assistant want a documented procedure rather than improvising?
 - `prose_suffices`: could a plain prose answer satisfy it?
 
 The gate is the mean of the first two and `1 - prose_suffices`. If the gate is below `SUGGEST_GATE` (0.30) the hook reports no relevant skill and stops after one request.
 
-**Request 2, shortlist pass.** The top `SUGGEST_SHORTLIST` (3) names from the wide Choice.
+**Request 2, shortlist pass.** The top `SUGGEST_SHORTLIST` (3) names from the wide Choice, or from each chunk when the roster was split.
 
 - `which`: a Choice over the three, each described by its full description plus the first 700 characters of its SKILL.md body.
 - `fits::<name>`: one Noul per shortlisted skill asking whether it performs the specific task requested. The instructions carry the skill name and description as a structured object.
@@ -64,14 +64,16 @@ If the best `fits` probability is below `SUGGEST_FIT` (0.30) nothing is suggeste
 |---|---|
 | `~/.claude/skills/<name>/SKILL.md` | `<name>` |
 | `~/.claude/skills/synced/<bucket>/<name>/SKILL.md` | `anthropic-skills:<name>` |
-| `~/.claude/skills/<plugin>/.claude-plugin/` (skills-dir plugins) | `<plugin>:<skill>`, `<plugin>:<command>` |
+| `~/.claude/skills/<dir>/.claude-plugin/` (skills-dir plugins) | `<plugin>:<skill>`, `<plugin>:<command>` |
 | `~/.claude/plugins/installed_plugins.json` entries with scope `user`, or scope `project` matching `cwd`, not disabled in `settings.json` | `<plugin>:<skill>`, `<plugin>:<command>` |
-| `~/.claude/plugins/synced/<bucket>/<plugin>/` | `<plugin>:<skill>`, `<plugin>:<command>` |
+| `~/.claude/plugins/synced/<bucket>/<dir>/`, such as `pdf-viewer~g2` | `<plugin>:<skill>`, `<plugin>:<command>` |
 | `<cwd>/.claude/skills/<name>/SKILL.md` | `<name>` |
 | `<cwd>/.claude/commands/<name>.md` | `<name>` |
 | `<cwd>/.agents/skills/<name>/SKILL.md` | `<name>` |
 
-Entries without a `description` in frontmatter are dropped: the model cannot judge what is not described. Duplicate names keep the first occurrence. Frontmatter parsing is minimal and folds indented continuation lines into the value, which is how the scaffolded descriptions are written.
+`<plugin>` is the `name` in the plugin's `.claude-plugin/plugin.json`, else the directory name without any `~suffix`; account-synced plugins live in directories such as `pdf-viewer~g2` while the catalog calls them `pdf-viewer` (decision 15).
+
+Entries without a `description` in frontmatter are dropped: the model cannot judge what is not described. So are entries with `disable-model-invocation: true`: the catalog hides them from the model, so it could not act on the suggestion. `user-invocable: false` skills stay; the model sees them. Duplicate names keep the first occurrence. Frontmatter parsing is minimal and folds indented continuation lines into the value, which is how the scaffolded descriptions are written; YAML block scalars (`description: >-` and the like) are folded the same way.
 
 **Codex** (codex-cli 0.154), taken from the `<skills_instructions>` catalog Codex writes into every session rollout rather than from its documentation:
 
@@ -83,7 +85,7 @@ Entries without a `description` in frontmatter are dropped: the model cannot jud
 | `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/.codex-plugin/migrated-command-skills/<dir>/SKILL.md` | `<plugin>:<dir>` |
 | `<cwd>/.agents/skills/<name>/SKILL.md` | `<name>` |
 
-A cached plugin counts when `~/.codex/config.toml` does not set `enabled = false` for `<plugin>@<marketplace>` and either declares `[marketplaces.<marketplace>]` or the marketplace is the account-managed `openai-curated-remote`, whose plugins have no config entry. The file is scanned line by line for those two things only. When several versions are cached the newest wins the name. Legacy `~/.codex/skills/<name>` and plugin `commands/` directories are not in the Codex catalog and are skipped.
+A cached plugin counts when `~/.codex/config.toml` does not set `enabled = false` for `<plugin>@<marketplace>` and either declares `[marketplaces.<marketplace>]` or the marketplace is the account-managed `openai-curated-remote`, whose plugins have no config entry. The file is scanned line by line for those two things only. When several versions are cached the newest wins the name, compared numerically (`10.0.0` is newer than `6.3.0`). Legacy `~/.codex/skills/<name>` and plugin `commands/` directories are not in the Codex catalog and are skipped.
 
 Compared with the catalog of a real session on this machine (111 entries), the loader produces the same 111 plus 21 it cannot tell apart: the 20 `openai-templates:*` skills of a remote plugin that is installed and enabled but not surfaced, and the system skill `review-agent`. Both have ordinary frontmatter; whatever hides them is not on disk. Decision 12.
 
@@ -91,7 +93,7 @@ Compared with the catalog of a real session on this machine (111 entries), the l
 
 ## Logging
 
-Each run that reaches the judge appends one JSON line to `suggestions.jsonl` in the data directory:
+Each run that is not skipped appends one JSON line to `suggestions.jsonl` in the data directory:
 
 | Field | Meaning |
 |---|---|
@@ -106,12 +108,15 @@ Each run that reaches the judge appends one JSON line to `suggestions.jsonl` in 
 | `fit` | best shortlist `fits` probability; absent when the gate closed |
 | `requests`, `inputTokens` | 1 or 2, and tokens billed |
 | `latency_ms` | wall time for the whole hook run |
+| `error` | only on a failed run: the error's name, such as `MissingApiKeyError` or `APIConnectionError`, or `deadline`. The suggestion fields are absent. Messages are never logged |
 
 The data directory is `CLAUDE_PLUGIN_DATA` when its basename starts with `jev`, otherwise `~/.local/state/jev-agent-tools/`. The basename check exists because a shell inherited from another plugin's context can carry that plugin's `CLAUDE_PLUGIN_DATA`; this was observed during development.
 
 ## Failure behaviour
 
-Any error, including a missing API key, a network failure, unreadable roster files or malformed stdin, results in exit 0 with no stdout. The prompt proceeds without a hint. The hook timeout in `hooks.json` is 10 s; typical runs are under 1 s.
+Any error, including a missing API key, a network failure, unreadable roster files or malformed stdin, results in exit 0 with no stdout and an `error` line in the log. The prompt proceeds without a hint.
+
+The hook gives itself `HOOK_DEADLINE_MS` (5 s) after reading stdin. Past that it stops waiting, cancels in-flight requests, prints nothing and logs `deadline`. This matters because the SDK's timeout is per attempt, with retries and no total budget. A backstop timer exits 0 if stdin never closes. The `hooks.json` timeout of 10 s is never reached; typical runs take about 1 s (decision 14).
 
 ## Observed behaviour on first day
 

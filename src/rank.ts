@@ -56,7 +56,8 @@ function validate(candidates: readonly Candidate[]): void {
   }
 }
 
-async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+/** Runs `fn` over `items` with at most `limit` in flight, keeping input order. */
+export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   async function worker(): Promise<void> {
@@ -97,7 +98,7 @@ export async function rank(judge: Judge, options: RankOptions): Promise<RankResu
       }),
     );
     scored = options.candidates.map((c, i) => ({ id: c.id, p: results[i]!.answers.matches.noul }));
-    exists = Math.max(...scored.map((s) => s.p));
+    exists = scored.reduce((max, s) => Math.max(max, s.p), 0);
     requests = results.length;
     inputTokens = results.reduce((sum, r) => sum + r.usage.input_tokens, 0);
   }

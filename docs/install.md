@@ -92,9 +92,10 @@ Any agent with a shell can run `jev` once it is on PATH; point its skill or inst
 ## Verifying an install
 
 ```bash
+jev --version
 echo '{"state":"Help!","questions":{"urgent":{"type":"noul","instructions":"Is this urgent?"}}}' | jev ask
 printf 'a.md:1: apples\nb.md:1: bolts\n' | jev rank --query "hardware" --lines
 echo '{"prompt":"audit the accessibility of the button","cwd":"'"$PWD"'"}' | node dist/hooks/skill-suggest.js
 ```
 
-The first two print JSON with probabilities. The third prints the hook's JSON with a `<skill_relevance>` block, and appends a line to `~/.local/state/jev-agent-tools/suggestions.jsonl` with `"agent":"unknown"`. Add `"turn_id":"x"` to the input to see the Codex roster ranked, or `"transcript_path":"x"` for Claude Code's.
+The first prints the version, matching `package.json`. The next two print JSON with probabilities. The last prints the hook's JSON with a `<skill_relevance>` block, and appends a line to `~/.local/state/jev-agent-tools/suggestions.jsonl` with `"agent":"unknown"`. Add `"turn_id":"x"` to the input to see the Codex roster ranked, or `"transcript_path":"x"` for Claude Code's.

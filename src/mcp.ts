@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 /**
- * MCP server exposing Jev to Claude: `jev_rank` for bulk ranking, `jev_ask` for raw
- * System One requests. Stdio transport; the API key comes from the environment or the
+ * MCP server exposing Jev to agents without a shell: `jev_rank` for bulk ranking, `jev_check` for
+ * yes/no conditions, `jev_classify` for labelling, `jev_ask` for raw System One requests. Stdio transport; the API key comes from the environment or the
  * key file (see client.ts).
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { EntryType, Questions } from '@typesafe-ai/sdk';
+import { check } from './check.js';
+import { classify } from './classify.js';
 import { createJudge, MissingApiKeyError } from './client.js';
 import type { Judge } from './judge.js';
+import { lintRequest } from './lint.js';
 import { rank } from './rank.js';
-import { askInput, rankInput } from './schemas.js';
+import { askInput, checkInput, classifyInput, rankInput } from './schemas.js';
+import { VERSION } from './version.js';
 
 let judge: Judge | undefined;
 function getJudge(): Judge {
@@ -23,7 +27,7 @@ function errorResult(error: unknown) {
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 
-const server = new McpServer({ name: 'jev', version: '0.1.0' });
+const server = new McpServer({ name: 'jev', version: VERSION });
 
 server.registerTool(
   'jev_rank',
@@ -51,19 +55,64 @@ server.registerTool(
 );
 
 server.registerTool(
+  'jev_check',
+  {
+    title: 'Check yes/no conditions with Jev',
+    description:
+      'Check several conditions against one subject in one request. Write each condition as a plain sentence ("adds a public export"); the question wording is fixed. Returns per condition a probability and a verdict: true, false or unsure. Not for arithmetic, dates or counting.',
+    inputSchema: checkInput.shape,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  async (input) => {
+    try {
+      const parsed = checkInput.parse(input);
+      const result = await check(getJudge(), { subject: parsed.subject as EntryType, conditions: parsed.conditions });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: { ...result } };
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  'jev_classify',
+  {
+    title: 'Label items with Jev',
+    description:
+      'Label each candidate with one of a few named options, one isolated request per item. A "none" option is added unless given. Returns per item the label and its probability, plus counts per label.',
+    inputSchema: classifyInput.shape,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  async (input) => {
+    try {
+      const parsed = classifyInput.parse(input);
+      const result = await classify(getJudge(), {
+        options: parsed.options,
+        items: parsed.candidates,
+        ...(parsed.query === undefined ? {} : { query: parsed.query }),
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: { ...result } };
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
   'jev_ask',
   {
     title: 'Ask Jev typed questions',
     description:
-      'Raw TypeSafe System One request: one state plus named questions of type noul (yes/no probability), choice (distribution over named options) or score (weighted position on 2-10 ordered levels). Independent questions run in parallel in one call. Returns answers keyed by question name with probabilities. Send minimal state.',
+      'Raw TypeSafe System One request: one state plus named questions of type noul (yes/no probability), choice (distribution over named options) or score (weighted position on 2-10 ordered levels). Independent questions run in parallel in one call. Returns answers keyed by question name with probabilities, and warnings about likely mistakes in the request. Prefer jev_check or jev_classify when they fit. Send minimal state.',
     inputSchema: askInput.shape,
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   async (input) => {
     try {
       const parsed = askInput.parse(input);
+      const warnings = lintRequest(parsed.state, parsed.questions);
       const result = await getJudge()({ state: parsed.state as EntryType, questions: parsed.questions as Questions });
-      const payload = { model: result.model, answers: result.answers, usage: result.usage };
+      const payload = { model: result.model, answers: result.answers, usage: result.usage, ...(warnings.length > 0 ? { warnings } : {}) };
       return { content: [{ type: 'text', text: JSON.stringify(payload) }], structuredContent: payload };
     } catch (error) {
       return errorResult(error);

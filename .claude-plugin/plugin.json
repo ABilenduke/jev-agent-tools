@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "jev",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Jev (TypeSafe System One) judgment tools for coding agents: the jev CLI (rank, ask), a skill on when to use it, and a per-prompt skill-suggestion hook.",
   "author": {
     "name": "Andrew Bilenduke",

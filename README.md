@@ -8,10 +8,12 @@ Jev is not a chat model. One request carries a `state` and typed questions (`nou
 
 | Piece | What it does |
 |---|---|
-| `jev rank` | Ranks many candidates against one query. Candidates come from `--files GLOB`, from grep output on stdin (`--lines`), or from JSON. Returns `exists`, a `verdict` and ranked ids with probabilities. The candidate text never passes through the agent's context. |
-| `jev ask` | Raw System One request on stdin: several independent checks over one state, a score on a described scale, a choice among options. |
-| `jev-tools` skill | Tells the agent when to reach for the command: lists longer than it wants to read, semantic find in long files, triage before reading. |
-| `UserPromptSubmit` hook | Two-pass ranking of every installed skill and slash command against the prompt, injecting a `<skill_relevance>` hint. Never blocks. Logs each run for tuning. |
+| `jev rank` | Ranks many candidates against one query. Candidates come from `--files GLOB`, from grep output on stdin (`--lines`), or from JSON. Returns `exists`, a `verdict` and ranked ids with probabilities. The candidate text never passes through the agent's context. Refuses more than 1,000 candidates unless `--max` says otherwise. |
+| `jev check` | Yes/no answers to several conditions about one subject, such as a diff, file or ticket, in one request. The agent writes each condition as a sentence; the question wording is fixed and reviewed. |
+| `jev classify` | Labels each of many items (grep hits, files, JSON) with one of a few named options, plus an automatic `none`. |
+| `jev ask` | Raw System One request on stdin for anything the three above do not cover. Warns about likely mistakes in the request. |
+| `jev-tools` skill | Tells the agent when to reach for the command and which subcommand fits, and how to write a raw request when none does. |
+| `UserPromptSubmit` hook | Two-pass ranking of every installed skill and slash command against the prompt, injecting a `<skill_relevance>` hint. Never blocks: gives up silently after 5 s. Logs each run, and each failure by name, for tuning. |
 | MCP server | Optional, for agents without a shell. Not registered by default. See [docs/why-a-cli.md](docs/why-a-cli.md) for why. |
 
 ## Quick start
@@ -22,6 +24,8 @@ mkdir -p ~/.config/typesafe && printf '%s' 'ts_...' > ~/.config/typesafe/api_key
 ln -s "$PWD" ~/.claude/skills/jev        # Claude Code plugin, loads next session as jev@skills-dir
 
 grep -rn "contrast" src | jev rank --query "where the WCAG ratio is actually computed" --lines --top 5
+git diff | jev check "adds a public export" "changes behaviour without a test"
+grep -rn TODO src | jev classify --lines --options bug,refactor,docs,feature
 jev rank --query "bears on the token pipeline" --files 'docs/**/*.md' --chars 300 --top 5
 jev --help
 ```
@@ -51,6 +55,6 @@ jev --help
 
 ## Status
 
-0.2.0, 2026-09-20. 40 offline tests. Verified live on Claude Code: the command in all three input modes, the hook on three prompts, the optional MCP server through an SDK client. Under Codex the hook ranks Codex's own roster, checked offline against a real session catalog; the live run is pending on a Codex usage limit (`docs/cross-agent.md`).
+0.3.0, 2026-09-24. 83 offline tests, including one that runs the built hook as a process. Verified live on Claude Code: `rank` in all three input modes, `check`, `classify` and `ask` warnings, the hook on three prompts, and all four tools of the optional MCP server through an SDK client. Under Codex the hook ranks Codex's own roster, checked offline against a real session catalog; the live run is pending on a Codex usage limit (`docs/cross-agent.md`).
 
 This is personal tooling. No company repository depends on it.

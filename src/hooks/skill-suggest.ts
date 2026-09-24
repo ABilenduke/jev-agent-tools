@@ -8,7 +8,8 @@
  * few with full descriptions and body excerpts and asks, per candidate, whether it does the
  * specific task. Anything short of both thresholds yields "no skill appears relevant".
  *
- * The hook never blocks: every failure path exits 0 with no output.
+ * The hook never blocks: every failure path, including the deadline, exits 0 with no output.
+ * `runHook` holds the whole run minus process I/O so tests drive it with a fake judge.
  */
 import { appendFile, mkdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -21,6 +22,7 @@ import {
   SUGGEST_BODY_CHARS,
   SUGGEST_FIT,
   SUGGEST_GATE,
+  SUGGEST_GATE_QUESTIONS,
   SUGGEST_SHORTLIST,
   suggestShortlistQuestions,
   suggestWideQuestions,
@@ -28,6 +30,13 @@ import {
 import { loadRoster, type Agent, type RosterEntry } from '../roster.js';
 
 export const MIN_PROMPT_CHARS = 12;
+
+/**
+ * Wall-clock budget for one hook run, after stdin is read. Under the 10 s timeout in hooks.json
+ * so the hook gives up quietly instead of being killed; the SDK's own timeout is per attempt
+ * with retries and no total budget. Typical runs take about 1 s (decision 14).
+ */
+export const HOOK_DEADLINE_MS = 5_000;
 
 export function shouldSkip(prompt: string): boolean {
   const trimmed = prompt.trim();
@@ -50,11 +59,18 @@ export async function suggest(judge: Judge, roster: readonly RosterEntry[], prom
   const state = { request: prompt };
 
   const wide = await judge({ state, questions: suggestWideQuestions(roster) });
-  const gates = [wide.answers.acts_on_user_system, wide.answers.would_follow_documented_procedure];
-  const gate = (gates.reduce((s, a) => s + a.noul, 0) + (1 - wide.answers.prose_suffices.noul)) / 3;
-  const ranked = Object.entries(wide.answers.which.probabilities)
+  const answers = wide.answers as Record<string, NoulResponse | ChoiceResponse<Record<string, string>>>;
+  const [acts, follows, prose] = SUGGEST_GATE_QUESTIONS.map((id) => (answers[id] as NoulResponse).noul) as [number, number, number];
+  const gate = (acts + follows + (1 - prose)) / 3;
+  // Each wide Choice (one, unless the roster exceeds a Choice) nominates its top few.
+  const ranked = Object.entries(answers)
+    .filter(([id]) => id === 'which' || id.startsWith('which::'))
+    .flatMap(([, a]) =>
+      Object.entries((a as ChoiceResponse<Record<string, string>>).probabilities)
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, SUGGEST_SHORTLIST),
+    )
     .sort((a, b) => b[1] - a[1])
-    .slice(0, SUGGEST_SHORTLIST)
     .map(([name]) => name);
   let inputTokens = wide.usage.input_tokens;
   if (gate < SUGGEST_GATE) return { skill: null, gate, shortlist: ranked, requests: 1, inputTokens };
@@ -109,6 +125,65 @@ export function dataDir(env: Readonly<Record<string, string | undefined>>, home:
   return join(home, '.local', 'state', 'jev-agent-tools');
 }
 
+export interface HookDeps {
+  /** Called once per run that reaches the judge; may throw (a missing key). */
+  readonly judge: () => Judge;
+  readonly home: string;
+  /** Used when stdin carries no `cwd`. */
+  readonly cwd: string;
+  readonly deadlineMs: number;
+}
+
+export interface HookRun {
+  /** What to print, only on success. */
+  readonly stdout?: string;
+  /** What to log. Never holds the prompt: a hash, its length, and error names only. */
+  readonly record?: Record<string, unknown>;
+}
+
+const DEADLINE = Symbol('deadline');
+
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T | typeof DEADLINE> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<typeof DEADLINE>((resolve) => {
+    timer = setTimeout(() => resolve(DEADLINE), ms);
+  });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
+}
+
+export async function runHook(stdinText: string, deps: HookDeps): Promise<HookRun> {
+  const started = Date.now();
+  const at = new Date(started).toISOString();
+  let context: Record<string, unknown> = {};
+  try {
+    const input = JSON.parse(stdinText) as { prompt?: unknown; cwd?: unknown; transcript_path?: unknown; turn_id?: unknown };
+    const prompt = typeof input.prompt === 'string' ? input.prompt : '';
+    if (shouldSkip(prompt)) return {};
+    const agent = detectAgent(input);
+    const cwd = typeof input.cwd === 'string' && input.cwd !== '' ? input.cwd : deps.cwd;
+    context = {
+      prompt_sha256: createHash('sha256').update(prompt).digest('hex').slice(0, 16),
+      prompt_chars: prompt.length,
+      agent,
+    };
+    const work = (async () => {
+      const judge = deps.judge();
+      const roster = await loadRoster({ home: deps.home, cwd, agent });
+      return { roster, result: await suggest(judge, roster, prompt) };
+    })();
+    const outcome = await withDeadline(work, deps.deadlineMs);
+    if (outcome === DEADLINE) return { record: { at, ...context, error: 'deadline', latency_ms: Date.now() - started } };
+    const { roster, result } = outcome;
+    return {
+      stdout: JSON.stringify(hookOutput(result.skill)),
+      record: { at, ...context, roster_size: roster.length, ...result, latency_ms: Date.now() - started },
+    };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : 'unknown';
+    return { record: { at, ...context, error: name, latency_ms: Date.now() - started } };
+  }
+}
+
 async function log(record: Record<string, unknown>): Promise<void> {
   try {
     const dir = dataDir(process.env, homedir());
@@ -126,24 +201,18 @@ async function readStdin(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const started = Date.now();
-  const input = JSON.parse(await readStdin()) as { prompt?: string; cwd?: string; transcript_path?: string; turn_id?: string };
-  const prompt = input.prompt ?? '';
-  if (shouldSkip(prompt)) return;
-  const judge = createJudge();
-  const agent = detectAgent(input);
-  const roster = await loadRoster({ home: homedir(), cwd: input.cwd ?? process.cwd(), agent });
-  const result = await suggest(judge, roster, prompt);
-  process.stdout.write(JSON.stringify(hookOutput(result.skill)));
-  await log({
-    at: new Date().toISOString(),
-    prompt_sha256: createHash('sha256').update(prompt).digest('hex').slice(0, 16),
-    prompt_chars: prompt.length,
-    agent,
-    roster_size: roster.length,
-    ...result,
-    latency_ms: Date.now() - started,
+  // Last resort if stdin never closes or something ignores the deadline: leave quietly.
+  setTimeout(() => process.exit(0), HOOK_DEADLINE_MS + 2_000).unref();
+  const stdin = await readStdin();
+  const signal = AbortSignal.timeout(HOOK_DEADLINE_MS);
+  const { stdout, record } = await runHook(stdin, {
+    judge: () => createJudge({ signal }),
+    home: homedir(),
+    cwd: process.cwd(),
+    deadlineMs: HOOK_DEADLINE_MS,
   });
+  if (stdout) process.stdout.write(stdout);
+  if (record) await log(record);
 }
 
 const invokedDirectly = process.argv[1]?.endsWith('skill-suggest.js') ?? false;

@@ -4,8 +4,8 @@
  * Claude Code sources, in the order Claude Code itself surfaces them:
  *   ~/.claude/skills/<name>/SKILL.md            user skills
  *   ~/.claude/skills/synced/<bucket>/<name>/    account-synced skills -> "anthropic-skills:<name>"
- *   ~/.claude/plugins/synced/<bucket>/<plugin>/  account-synced plugins -> "<plugin>:<skill>"
- *   ~/.claude/skills/<plugin>/.claude-plugin/   skills-dir plugins -> "<plugin>:<skill>"
+ *   ~/.claude/plugins/synced/<bucket>/<dir>/    account-synced plugins -> "<plugin>:<skill>"
+ *   ~/.claude/skills/<dir>/.claude-plugin/      skills-dir plugins -> "<plugin>:<skill>"
  *   ~/.claude/plugins/installed_plugins.json    marketplace plugins (user scope, or this project)
  *   <cwd>/.claude/skills, .claude/commands, .agents/skills
  *
@@ -20,7 +20,9 @@
  * ~/.codex/skills/<name> and plugin commands/ are not in the Codex catalog and are skipped.
  *
  * Names are namespaced the way each session catalog shows them so a suggestion can be
- * invoked verbatim.
+ * invoked verbatim: a plugin is named by its plugin.json `name`, not its directory, which may
+ * carry a generation suffix such as `pdf-viewer~g2`. Entries marked
+ * `disable-model-invocation: true` are left out because the catalog hides them from the model.
  */
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -39,6 +41,8 @@ export interface RosterEntry {
 export interface ParsedSkillFile {
   readonly name: string | undefined;
   readonly description: string | undefined;
+  /** `disable-model-invocation: true`: only the user can run it, so the model's catalog omits it. */
+  readonly disableModelInvocation: boolean;
   readonly body: string;
 }
 
@@ -47,17 +51,24 @@ const BODY_CHARS = 2_000;
 /** The session catalog shows account-synced user skills under this namespace. */
 const SYNCED_SKILLS_PREFIX = 'anthropic-skills:';
 
-/** Minimal frontmatter reader: `key: value` with indented continuation lines folded into one. */
+/** YAML block-scalar indicators (`description: >-` and friends); the value is the folded lines below. */
+const BLOCK_SCALAR = /^[|>][+-]?$/;
+
+/**
+ * Minimal frontmatter reader: `key: value` with indented continuation lines folded into one.
+ * Block scalars are folded the same way, which is close enough for a description.
+ */
 export function parseSkillFile(markdown: string): ParsedSkillFile {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(markdown);
-  if (!match) return { name: undefined, description: undefined, body: markdown.trim().slice(0, BODY_CHARS) };
+  if (!match) return { name: undefined, description: undefined, disableModelInvocation: false, body: markdown.trim().slice(0, BODY_CHARS) };
   const fields: Record<string, string> = {};
   let current: string | undefined;
   for (const raw of match[1]!.split(/\r?\n/)) {
     const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(raw);
     if (kv) {
       current = kv[1]!;
-      fields[current] = kv[2]!.trim();
+      const value = kv[2]!.trim();
+      fields[current] = BLOCK_SCALAR.test(value) ? '' : value;
     } else if (current && /^\s+\S/.test(raw)) {
       fields[current] = `${fields[current]} ${raw.trim()}`.trim();
     }
@@ -70,6 +81,7 @@ export function parseSkillFile(markdown: string): ParsedSkillFile {
   return {
     name: unquote(fields['name']),
     description: unquote(fields['description']),
+    disableModelInvocation: fields['disable-model-invocation'] === 'true',
     body: markdown.slice(match[0].length).trim().slice(0, BODY_CHARS),
   };
 }
@@ -113,7 +125,7 @@ async function skillEntry(path: string, fallbackName: string, prefix: string, ki
   if (text === undefined) return undefined;
   const parsed = parseSkillFile(text);
   const description = parsed.description;
-  if (!description) return undefined;
+  if (!description || parsed.disableModelInvocation) return undefined;
   const name = `${prefix}${parsed.name ?? fallbackName}`;
   return { name, description, body: parsed.body, path, kind };
 }
@@ -136,6 +148,17 @@ async function commandsUnder(root: string, prefix = ''): Promise<RosterEntry[]> 
     if (entry) out.push({ ...entry, name: `${prefix}${file.slice(0, -3)}` });
   }
   return out;
+}
+
+/** A plugin's catalog name: plugin.json `name`, else its directory name without a `~suffix`. */
+async function pluginName(dir: string, dirName: string): Promise<string> {
+  try {
+    const name = (JSON.parse((await readOptional(join(dir, '.claude-plugin', 'plugin.json'))) ?? '{}') as { name?: unknown }).name;
+    if (typeof name === 'string' && name.trim() !== '') return name.trim();
+  } catch {
+    // fall through to the directory name
+  }
+  return dirName.replace(/~[^~]*$/, '');
 }
 
 async function pluginEntries(installPath: string, pluginName: string): Promise<RosterEntry[]> {
@@ -183,7 +206,10 @@ async function syncedPluginEntries(home: string): Promise<RosterEntry[]> {
   const root = join(home, '.claude', 'plugins', 'synced');
   const out: RosterEntry[] = [];
   for (const bucket of await listDirs(root)) {
-    for (const plugin of await listDirs(join(root, bucket))) out.push(...(await pluginEntries(join(root, bucket, plugin), plugin)));
+    for (const dir of await listDirs(join(root, bucket))) {
+      const path = join(root, bucket, dir);
+      out.push(...(await pluginEntries(path, await pluginName(path, dir))));
+    }
   }
   return out;
 }
@@ -198,7 +224,7 @@ async function userSkillEntries(home: string): Promise<RosterEntry[]> {
       continue;
     }
     if (await isDir(join(path, '.claude-plugin'))) {
-      out.push(...(await pluginEntries(path, dir)));
+      out.push(...(await pluginEntries(path, await pluginName(path, dir))));
       continue;
     }
     const entry = await skillEntry(join(path, 'SKILL.md'), dir, '', 'skill');
@@ -255,7 +281,8 @@ async function codexPluginEntries(home: string): Promise<RosterEntry[]> {
     if (!config.marketplaces.has(marketplace) && marketplace !== CODEX_REMOTE_MARKETPLACE) continue;
     for (const plugin of await listDirs(join(cache, marketplace))) {
       if (config.enabled.get(`${plugin}@${marketplace}`) === false) continue;
-      const versions = (await listDirs(join(cache, marketplace, plugin))).sort().reverse();
+      // newest first, so the newest version wins a name; numeric so 10.0.0 sorts above 6.3.0
+      const versions = (await listDirs(join(cache, marketplace, plugin))).sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
       for (const version of versions) {
         const root = join(cache, marketplace, plugin, version);
         out.push(...(await skillsUnder(join(root, 'skills'), `${plugin}:`)));

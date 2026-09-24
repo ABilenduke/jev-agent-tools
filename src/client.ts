@@ -50,6 +50,8 @@ function readOptional(path: string): string | undefined {
 export interface CreateJudgeOptions {
   readonly apiKey?: string;
   readonly timeoutMs?: number;
+  /** Cancels in-flight requests and pending retries; the SDK's timeout is per attempt, with no total budget. */
+  readonly signal?: AbortSignal;
 }
 
 /** Builds a `Judge` backed by the real API. Throws `MissingApiKeyError` when no key is found. */
@@ -62,5 +64,6 @@ export function createJudge(options: CreateJudgeOptions = {}): Judge {
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     logLevel: 'error',
   });
-  return (request) => client.systemOne({ state: request.state, questions: request.questions });
+  const requestOptions = options.signal ? { signal: options.signal } : {};
+  return (request) => client.systemOne({ state: request.state, questions: request.questions }, requestOptions);
 }

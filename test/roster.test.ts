@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseSkillFile, loadRoster } from '../src/roster.js';
+import { parseSkillFile, parseCodexConfig, loadRoster } from '../src/roster.js';
 
 test('parseSkillFile reads name, folded description and body excerpt', () => {
   const md = `---
@@ -19,6 +19,29 @@ Body text here.`;
   assert.equal(parsed.name, 'example');
   assert.equal(parsed.description, 'Use when the user wants X. Continues on a second line.');
   assert.match(parsed.body, /^# Example/);
+});
+
+test('parseSkillFile folds YAML block scalars without keeping the indicator', () => {
+  for (const indicator of ['>', '>-', '|', '|-', '>+']) {
+    const parsed = parseSkillFile(`---\nname: x\ndescription: ${indicator}\n  Folded text\n  continues.\n---\nbody`);
+    assert.equal(parsed.description, 'Folded text continues.', indicator);
+  }
+});
+
+test('parseSkillFile reads disable-model-invocation', () => {
+  assert.equal(parseSkillFile('---\ndescription: d\ndisable-model-invocation: true\n---\n').disableModelInvocation, true);
+  assert.equal(parseSkillFile('---\ndescription: d\n---\n').disableModelInvocation, false);
+});
+
+test('parseCodexConfig reads declared marketplaces and plugin enabled flags only', () => {
+  const config = parseCodexConfig(
+    ['model = "x"', '[marketplaces.mk]', 'enabled = false', '[marketplaces."quoted-mk"]', '[plugins."a@mk"]', 'enabled = false', '[plugins."b@mk"]', 'enabled = true # on', '[other]', 'enabled = false'].join('\n'),
+  );
+  assert.deepEqual([...config.marketplaces].sort(), ['mk', 'quoted-mk']);
+  assert.deepEqual([...config.enabled.entries()].sort(), [
+    ['a@mk', false],
+    ['b@mk', true],
+  ]);
 });
 
 test('parseSkillFile tolerates a file without frontmatter', () => {
@@ -46,14 +69,16 @@ before(() => {
   // user skills, including a synced bucket and a skills-dir plugin
   write(join(home, '.claude/skills/cylinder-design/SKILL.md'), skill('cylinder-design', 'Design judgment.'));
   write(join(home, '.claude/skills/synced/uuid_x/docx/SKILL.md'), skill('docx', 'Word documents.'));
-  write(join(home, '.claude/skills/jev/.claude-plugin/plugin.json'), JSON.stringify({ name: 'jev' }));
-  write(join(home, '.claude/skills/jev/skills/jev-tools/SKILL.md'), skill('jev-tools', 'Rank many items.'));
+  write(join(home, '.claude/skills/jev-agent-tools/.claude-plugin/plugin.json'), JSON.stringify({ name: 'jev' }));
+  write(join(home, '.claude/skills/jev-agent-tools/skills/jev-tools/SKILL.md'), skill('jev-tools', 'Rank many items.'));
+  write(join(home, '.claude/skills/folded/SKILL.md'), `---\nname: folded\ndescription: >-\n  Folded text\n  continues.\n---\nbody`);
   write(join(home, '.claude/skills/nodesc/SKILL.md'), `---\nname: nodesc\n---\nbody`);
 
   // installed plugins: one user-scoped, one for this project, one for another project, one disabled
   const cache = join(home, '.claude/plugins/cache');
   write(join(cache, 'mk/superpowers/1/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent.'));
   write(join(cache, 'mk/superpowers/1/commands/write-plan.md'), `---\ndescription: Write a plan.\n---\nDo it.`);
+  write(join(cache, 'mk/superpowers/1/commands/user-only.md'), `---\ndescription: Only the user runs this.\ndisable-model-invocation: true\n---\nDo it.`);
   write(join(cache, 'mk/proj/1/skills/here/SKILL.md'), skill('here', 'Project plugin.'));
   write(join(cache, 'mk/elsewhere/1/skills/there/SKILL.md'), skill('there', 'Other project plugin.'));
   write(join(cache, 'mk/off/1/skills/off/SKILL.md'), skill('off', 'Disabled plugin.'));
@@ -71,10 +96,11 @@ before(() => {
   );
   write(join(home, '.claude/settings.json'), JSON.stringify({ enabledPlugins: { 'superpowers@mk': true, 'off@mk': false } }));
 
-  // account-synced plugins: ~/.claude/plugins/synced/<bucket>/<plugin>/{skills,commands}
+  // account-synced plugins: ~/.claude/plugins/synced/<bucket>/<plugin>[~gN]/{skills,commands}
   const synced = join(home, '.claude/plugins/synced/bucket_1');
-  write(join(synced, 'design/skills/accessibility-review/SKILL.md'), skill('accessibility-review', 'WCAG audit.'));
-  write(join(synced, 'pdf-viewer/commands/open.md'), `---\ndescription: Open a PDF.\n---\nOpen.`);
+  write(join(synced, 'design~g3/skills/accessibility-review/SKILL.md'), skill('accessibility-review', 'WCAG audit.'));
+  write(join(synced, 'pdf-viewer~g2/.claude-plugin/plugin.json'), JSON.stringify({ name: 'pdf-viewer' }));
+  write(join(synced, 'pdf-viewer~g2/commands/open.md'), `---\ndescription: Open a PDF.\n---\nOpen.`);
   write(join(synced, 'manifest.json'), '{}');
 
   // project-level
@@ -89,10 +115,11 @@ before(() => {
 
   // Codex plugin cache: <marketplace>/<plugin>/<version>/{skills,commands,.codex-plugin/migrated-command-skills}
   const codexCache = join(home, '.codex/plugins/cache');
-  write(join(codexCache, 'mk/superpowers/6.3.0/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent (codex).'));
-  write(join(codexCache, 'mk/superpowers/6.3.0/skills/newer-only/SKILL.md'), skill('newer-only', 'Only in the newer version.'));
-  write(join(codexCache, 'mk/superpowers/5.0.0/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent (old).'));
-  write(join(codexCache, 'mk/superpowers/5.0.0/skills/older-only/SKILL.md'), skill('older-only', 'Only in the older version.'));
+  // 10.0.0 is newer than 6.3.0 even though it sorts first as text
+  write(join(codexCache, 'mk/superpowers/10.0.0/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent (codex).'));
+  write(join(codexCache, 'mk/superpowers/10.0.0/skills/newer-only/SKILL.md'), skill('newer-only', 'Only in the newer version.'));
+  write(join(codexCache, 'mk/superpowers/6.3.0/skills/brainstorming/SKILL.md'), skill('brainstorming', 'Explore intent (old).'));
+  write(join(codexCache, 'mk/superpowers/6.3.0/skills/older-only/SKILL.md'), skill('older-only', 'Only in the older version.'));
   write(join(codexCache, 'mk/ralph/1.0.0/commands/help.md'), `---\ndescription: Explain ralph.\n---\nHelp.`);
   write(join(codexCache, 'mk/ralph/1.0.0/.codex-plugin/migrated-command-skills/source-command-help/SKILL.md'), skill('source-command-help', 'Explain ralph.'));
   write(join(codexCache, 'mk/cmd-only/local/commands/review.md'), `---\ndescription: Review code.\n---\nReview.`);
@@ -132,6 +159,7 @@ const CLAUDE_NAMES = [
   'agents-skill',
   'superpowers:brainstorming',
   'cylinder-design',
+  'folded',
   'anthropic-skills:docx',
   'design:accessibility-review',
   'pdf-viewer:open',
@@ -179,6 +207,20 @@ test('loadRoster drops entries without a description and marks commands', async 
   assert.equal(roster.find((e) => e.name === 'superpowers:write-plan')?.kind, 'command');
   assert.equal(roster.find((e) => e.name === 'pdf-viewer:open')?.kind, 'command');
   assert.equal(roster.find((e) => e.name === 'cylinder-design')?.kind, 'skill');
+});
+
+test('loadRoster names plugins from plugin.json, else the directory without its ~suffix', async () => {
+  const names = (await loadRoster({ home, cwd, agent: 'claude' })).map((e) => e.name);
+  assert.ok(names.includes('pdf-viewer:open'));
+  assert.ok(names.includes('design:accessibility-review'));
+  assert.ok(names.includes('jev:jev-tools'));
+  assert.equal(names.filter((n) => n.includes('~')).length, 0);
+});
+
+test('loadRoster drops entries the model cannot invoke and folds block-scalar descriptions', async () => {
+  const roster = await loadRoster({ home, cwd, agent: 'claude' });
+  assert.equal(roster.find((e) => e.name === 'superpowers:user-only'), undefined);
+  assert.equal(roster.find((e) => e.name === 'folded')?.description, 'Folded text continues.');
 });
 
 test('loadRoster keeps a body excerpt for the shortlist pass', async () => {

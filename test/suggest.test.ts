@@ -1,8 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Questions, SystemOneResult } from '@typesafe-ai/sdk';
-import { suggest, shouldSkip, hookOutput, detectAgent } from '../src/hooks/skill-suggest.js';
-import { SUGGEST_GATE, SUGGEST_FIT, SUGGEST_SHORTLIST } from '../src/questions.js';
+import { suggest, shouldSkip, hookOutput, detectAgent, dataDir, runHook, type HookDeps } from '../src/hooks/skill-suggest.js';
+import { MissingApiKeyError } from '../src/client.js';
+import { SUGGEST_GATE, SUGGEST_FIT, SUGGEST_SHORTLIST, WINDOW_MAX } from '../src/questions.js';
 import type { Judge, JudgeRequest } from '../src/judge.js';
 import type { RosterEntry } from '../src/roster.js';
 
@@ -91,8 +97,6 @@ test('hookOutput wraps the suggestion for UserPromptSubmit', () => {
   assert.match(none.hookSpecificOutput.additionalContext, /No skill in the roster appears relevant/);
 });
 
-import { dataDir } from '../src/hooks/skill-suggest.js';
-
 test('dataDir trusts CLAUDE_PLUGIN_DATA only when it belongs to this plugin', () => {
   const home = '/home/u';
   assert.equal(dataDir({ CLAUDE_PLUGIN_DATA: '/x/plugins/data/jev-skills-dir' }, home), '/x/plugins/data/jev-skills-dir');
@@ -105,4 +109,118 @@ test('detectAgent reads the harness from hook stdin fields', () => {
   assert.equal(detectAgent({ turn_id: '0199-abc' }), 'codex');
   assert.equal(detectAgent({ transcript_path: '/t', turn_id: 'x' }), 'claude');
   assert.equal(detectAgent({}), 'unknown');
+});
+
+test('suggest splits a roster larger than one Choice into chunks in the same request and shortlists each chunk\'s nominees', async () => {
+  const big = Array.from({ length: 300 }, (_, i) => entry(`s${i}`, `Skill ${i}.`));
+  const choiceP = { s0: 0.9, s1: 0.5, s2: 0.4, s200: 0.8, s201: 0.3, s202: 0.2 };
+  const { judge, requests } = fakeJudge(choiceP, { ...gateOpen, 'fits::s0': 0.9 });
+  const result = await suggest(judge, big, 'audit the accessibility of the button');
+  assert.equal(requests.length, 2);
+  const wide = requests[0]!.questions;
+  assert.equal(wide['which'], undefined);
+  const chunks = Object.keys(wide).filter((k) => k.startsWith('which::'));
+  assert.deepEqual(chunks, ['which::0', 'which::1']);
+  const names = chunks.flatMap((k) => Object.keys((wide[k] as { criteria: object }).criteria));
+  for (const k of chunks) assert.ok(Object.keys((wide[k] as { criteria: object }).criteria).length <= WINDOW_MAX);
+  assert.deepEqual(names, big.map((e) => e.name));
+  assert.deepEqual(result.shortlist, ['s0', 's200', 's1', 's2', 's201', 's202']);
+  assert.deepEqual(Object.keys((requests[1]!.questions['which'] as { criteria: object }).criteria), result.shortlist);
+  assert.equal(result.skill, 's0');
+});
+
+// ---------------------------------------------------------------------------------------------
+// runHook: the whole hook run minus process I/O
+// ---------------------------------------------------------------------------------------------
+
+function hookHome(): { home: string; cwd: string; cleanup: () => void } {
+  const home = mkdtempSync(join(tmpdir(), 'jev-hook-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'jev-hook-cwd-'));
+  mkdirSync(join(home, '.claude/skills/a11y'), { recursive: true });
+  writeFileSync(join(home, '.claude/skills/a11y/SKILL.md'), '---\nname: a11y\ndescription: Accessibility audits.\n---\n\nSteps.');
+  return { home, cwd, cleanup: () => [home, cwd].forEach((d) => rmSync(d, { recursive: true, force: true })) };
+}
+
+const PROMPT = 'audit the accessibility of the button';
+
+function deps(home: string, cwd: string, judge: () => Judge, deadlineMs = 1_000): HookDeps {
+  return { judge, home, cwd, deadlineMs };
+}
+
+test('runHook suggests a skill, logs a hashed record, and never logs the prompt', async () => {
+  const { home, cwd, cleanup } = hookHome();
+  try {
+    const { judge } = fakeJudge({ a11y: 1 }, { ...gateOpen, 'fits::a11y': 0.9 });
+    const run = await runHook(JSON.stringify({ prompt: PROMPT, cwd, transcript_path: '/t.jsonl' }), deps(home, cwd, () => judge));
+    assert.match(run.stdout ?? '', /Relevant to the current request: a11y\./);
+    assert.equal(run.record?.['agent'], 'claude');
+    assert.equal(run.record?.['skill'], 'a11y');
+    assert.equal(run.record?.['roster_size'], 1);
+    assert.equal(typeof run.record?.['latency_ms'], 'number');
+    assert.equal(run.record?.['error'], undefined);
+    assert.ok(!JSON.stringify(run.record).includes(PROMPT));
+  } finally {
+    cleanup();
+  }
+});
+
+test('runHook does nothing for a skipped prompt', async () => {
+  const { home, cwd, cleanup } = hookHome();
+  try {
+    const run = await runHook(JSON.stringify({ prompt: '/commit' }), deps(home, cwd, () => assert.fail('no judge for a skipped prompt')));
+    assert.deepEqual(run, {});
+  } finally {
+    cleanup();
+  }
+});
+
+test('runHook turns malformed stdin into an error record and no output', async () => {
+  const run = await runHook('{not json', deps('/nonexistent', '/nonexistent', () => assert.fail('no judge')));
+  assert.equal(run.stdout, undefined);
+  assert.equal(run.record?.['error'], 'SyntaxError');
+});
+
+test('runHook logs a missing key by error name only and prints nothing', async () => {
+  const { home, cwd, cleanup } = hookHome();
+  try {
+    const run = await runHook(JSON.stringify({ prompt: PROMPT, cwd }), deps(home, cwd, () => {
+      throw new MissingApiKeyError(home);
+    }));
+    assert.equal(run.stdout, undefined);
+    assert.equal(run.record?.['error'], 'MissingApiKeyError');
+    assert.equal(run.record?.['agent'], 'unknown');
+    assert.ok(!JSON.stringify(run.record).includes(home));
+  } finally {
+    cleanup();
+  }
+});
+
+test('runHook gives up at the deadline with no output', async () => {
+  const { home, cwd, cleanup } = hookHome();
+  try {
+    const never: Judge = () => new Promise(() => undefined);
+    const run = await runHook(JSON.stringify({ prompt: PROMPT, cwd }), deps(home, cwd, () => never, 20));
+    assert.equal(run.stdout, undefined);
+    assert.equal(run.record?.['error'], 'deadline');
+  } finally {
+    cleanup();
+  }
+});
+
+test('the built hook exits 0 with no stdout on garbage input and on a missing key', () => {
+  const script = fileURLToPath(new URL('../src/hooks/skill-suggest.js', import.meta.url));
+  const home = mkdtempSync(join(tmpdir(), 'jev-hook-proc-'));
+  try {
+    const env = { PATH: process.env['PATH'] ?? '', HOME: home };
+    const garbage = spawnSync(process.execPath, [script], { input: '{garbage', env, encoding: 'utf8' });
+    assert.equal(garbage.status, 0);
+    assert.equal(garbage.stdout, '');
+    const noKey = spawnSync(process.execPath, [script], { input: JSON.stringify({ prompt: PROMPT, cwd: home }), env, encoding: 'utf8' });
+    assert.equal(noKey.status, 0);
+    assert.equal(noKey.stdout, '');
+    const log = readFileSync(join(home, '.local/state/jev-agent-tools/suggestions.jsonl'), 'utf8').trim().split('\n');
+    assert.equal((JSON.parse(log.at(-1)!) as { error: string }).error, 'MissingApiKeyError');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

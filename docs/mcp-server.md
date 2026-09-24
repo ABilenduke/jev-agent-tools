@@ -1,6 +1,6 @@
 # Optional MCP server
 
-`dist/mcp.js` is a stdio MCP server exposing the same two operations as the command. It is **not registered by default**: the plugin ships no `.mcp.json`, and `claude plugin details` shows zero MCP servers. It exists for agents that cannot run a shell.
+`dist/mcp.js` is a stdio MCP server exposing the same four operations as the command. It is **not registered by default**: the plugin ships no `.mcp.json`, and `claude plugin details` shows zero MCP servers. It exists for agents that cannot run a shell.
 
 ## Why it is opt-in
 
@@ -19,9 +19,13 @@ Or by hand in a `.mcp.json` / `config.toml` stdio entry with `command: node` and
 
 **`jev_rank`** — input `{ query, candidates: [{id, text}], mode?: "window"|"rerank", top?: number }`, output as `jev rank`. Returns `isError` with a message on validation or runtime failure.
 
-**`jev_ask`** — input `{ state, questions }`, output `{ model, answers, usage }` as `jev ask`.
+**`jev_check`** — input `{ subject, conditions: string[] }`, output as `jev check`.
 
-Both are annotated read-only and open-world. Input schemas are the zod schemas in `src/schemas.ts`, shared with the command, so the two interfaces cannot drift.
+**`jev_classify`** — input `{ query?, options: { label: description | null }, candidates: [{id, text}] }`, output as `jev classify`. At least two options; `none` is added unless given.
+
+**`jev_ask`** — input `{ state, questions }`, output `{ model, answers, usage }` as `jev ask`, plus `warnings` (a list of strings) when the request looks mistaken; the command prints the same warnings on stderr.
+
+All four are annotated read-only and open-world. Input schemas are the zod schemas in `src/schemas.ts`: `askInput` validates `jev ask`, and `candidateList` validates the candidates of `jev_rank` and `jev_classify` as well as the command's JSON input. The logic behind each tool is the same module the command calls, so the two interfaces cannot drift. The server reports the package version from `src/version.ts`. `jev_rank` and `jev_classify` do not apply `MAX_CANDIDATES`: candidates reaching it were written out by the model, which already bounds them.
 
 ## Verifying
 
